@@ -1,0 +1,45 @@
+# Spin up isolated Gas Town instances. Used by the gt-docker script.
+#
+# Each instance gets its own named volumes for /gt (town) and /home/agent (home),
+# namespaced via COMPOSE_PROJECT_NAME set by gt-docker.
+#
+# Manual usage:
+#   COMPOSE_PROJECT_NAME=gt-alpha GT_INSTANCE=alpha docker compose up -d
+
+services:
+  gastown:
+    build:
+      context: https://github.com/steveyegge/gastown.git
+      dockerfile: Dockerfile
+    container_name: gastown-${GT_INSTANCE:?Set GT_INSTANCE}
+    user: root
+    stdin_open: false
+    tty: false
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+      - NET_RAW
+    environment:
+      IS_SANDBOX: 1
+      GT_INSTANCE: ${GT_INSTANCE}
+      GIT_USER: ${GIT_USER:-TestUser}
+      GIT_EMAIL: ${GIT_EMAIL:-test@example.com}
+      SSH_AUTH_SOCK: /run/host-services/ssh-auth.sock
+    volumes:
+      - town:/gt
+      - home:/home/agent
+      - /run/host-services/ssh-auth.sock:/run/host-services/ssh-auth.sock
+    ports:
+      - "${DASHBOARD_PORT:-0}:8080"
+    command: sleep infinity
+
+volumes:
+  town:
+  home:

@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve symlinks to find the real script directory
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+
+# macOS Docker Desktop puts binaries here
+if [[ -d /Applications/Docker.app/Contents/Resources/bin ]]; then
+    export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+fi
+
+usage() {
+    cat <<'EOF'
+gt-docker — manage isolated Gas Town Docker instances
+
+Usage:
+  gt-docker up <instance>            Create and start an instance
+  gt-docker down <instance>          Stop and remove an instance (keeps volumes)
+  gt-docker destroy <instance>       Stop, remove, AND delete volumes
+  gt-docker mayor <instance>         Attach to the Mayor tmux session
+  gt-docker shell <instance>         Open a shell in the container
+  gt-docker exec <instance> <cmd..>  Run a command in the container
+  gt-docker list                     List running gastown containers
+  gt-docker logs <instance>          Tail container logs
+
+Environment:
+  GIT_USER       Git user.name  (default: TestUser)
+  GIT_EMAIL      Git user.email (default: test@example.com)
+  DASHBOARD_PORT Host port for dashboard (default: auto-assigned)
+
+Examples:
+  gt-docker up alpha
+  gt-docker up bravo
+  gt-docker mayor alpha              # attach to alpha's Mayor
+  gt-docker exec bravo gt agents     # check agents in bravo
+  gt-docker list                     # see all running instances
+  gt-docker destroy alpha            # tear down alpha completely
+EOF
+    exit 1
+}
+
+container_name() {
+    echo "gastown-$1"
+}
+
+compose_env() {
+    local instance="$1"
+    export GT_INSTANCE="$instance"
+    export COMPOSE_PROJECT_NAME="gt-$instance"
+}
+
+require_running() {
+    local cname
+    cname="$(container_name "$1")"
+    if ! docker inspect --format='{{.State.Running}}' "$cname" 2>/dev/null | grep -q true; then
+        echo "Error: instance '$1' is not running (container: $cname)" >&2
+        echo "Start it with: gt-docker up $1" >&2
+        exit 1
+    fi
+}
+
+cmd_up() {
+    local instance="$1"
+    compose_env "$instance"
+    echo "Starting gastown instance '$instance'..."
+    docker compose -f "$COMPOSE_FILE" up -d --build
+    echo ""
+    echo "Instance '$instance' is running."
+    echo "  Container: $(container_name "$instance")"
+    echo ""
+    echo "First time? Authenticate Claude and initialize:"
+    echo "  gt-docker shell $instance"
+    echo "  claude login"
+    echo "  gt up && gt mayor attach"
+    echo ""
+    echo "Already initialized? Attach directly:"
+    echo "  gt-docker mayor $instance"
+}
+
+cmd_down() {
+    local instance="$1"
+    compose_env "$instance"
+    echo "Stopping instance '$instance'..."
+    docker compose -f "$COMPOSE_FILE" down
+}
+
+cmd_destroy() {
+    local instance="$1"
+    compose_env "$instance"
+    echo "Destroying instance '$instance' (including volumes)..."
+    docker compose -f "$COMPOSE_FILE" down -v
+}
+
+cmd_mayor() {
+    local instance="$1"
+    local cname
+    cname="$(container_name "$instance")"
+    require_running "$instance"
+
+    # Check if the mayor tmux session exists
+    if docker exec "$cname" tmux has-session -t hq-mayor 2>/dev/null; then
+        echo "Attaching to Mayor in instance '$instance'..."
+        docker exec -it "$cname" tmux attach-session -t hq-mayor
+    else
+        # No mayor session yet — start one via gt mayor attach
+        echo "No Mayor session found in '$instance'. Starting one..."
+        docker exec -it "$cname" /app/gastown/gt mayor attach
+    fi
+}
+
+cmd_shell() {
+    local instance="$1"
+    local cname
+    cname="$(container_name "$instance")"
+    require_running "$instance"
+    docker exec -it "$cname" zsh
+}
+
+cmd_exec_cmd() {
+    local instance="$1"
+    shift
+    local cname
+    cname="$(container_name "$instance")"
+    require_running "$instance"
+    if [[ -t 0 ]]; then
+        docker exec -it "$cname" "$@"
+    else
+        docker exec "$cname" "$@"
+    fi
+}
+
+cmd_list() {
+    echo "Running gastown instances:"
+    echo ""
+    docker ps --filter "name=gastown-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+}
+
+cmd_logs() {
+    local instance="$1"
+    local cname
+    cname="$(container_name "$instance")"
+    require_running "$instance"
+    docker logs -f "$cname"
+}
+
+# --- main ---
+
+[[ $# -lt 1 ]] && usage
+
+cmd="$1"
+shift
+
+case "$cmd" in
+    up|start)
+        [[ $# -lt 1 ]] && { echo "Usage: gt-docker up <instance>" >&2; exit 1; }
+        cmd_up "$1"
+        ;;
+    down|stop)
+        [[ $# -lt 1 ]] && { echo "Usage: gt-docker down <instance>" >&2; exit 1; }
+        cmd_down "$1"
+        ;;
+    destroy|rm)
+        [[ $# -lt 1 ]] && { echo "Usage: gt-docker destroy <instance>" >&2; exit 1; }
+        cmd_destroy "$1"
+        ;;
+    mayor|attach)
+        [[ $# -lt 1 ]] && { echo "Usage: gt-docker mayor <instance>" >&2; exit 1; }
+        cmd_mayor "$1"
+        ;;
+    shell|sh)
+        [[ $# -lt 1 ]] && { echo "Usage: gt-docker shell <instance>" >&2; exit 1; }
+        cmd_shell "$1"
+        ;;
+    exec)
+        [[ $# -lt 1 ]] && { echo "Usage: gt-docker exec <instance> <cmd..>" >&2; exit 1; }
+        cmd_exec_cmd "$@"
+        ;;
+    list|ls|ps)
+        cmd_list
+        ;;
+    logs)
+        [[ $# -lt 1 ]] && { echo "Usage: gt-docker logs <instance>" >&2; exit 1; }
+        cmd_logs "$1"
+        ;;
+    help|--help|-h)
+        usage
+        ;;
+    *)
+        echo "Unknown command: $cmd" >&2
+        usage
+        ;;
+esac
