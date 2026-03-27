@@ -1,18 +1,22 @@
 # gastown-docker
 
-Run multiple isolated [Gas Town](https://github.com/steveyegge/gastown) instances in Docker containers. Each instance gets its own town workspace, home directory, and dashboard — fully isolated from each other and your host machine.
+Run multiple isolated [Gas Town](https://github.com/steveyegge/gastown) instances in Docker containers. Each instance gets its own town workspace, home directory, dashboard, and browser-based terminal — fully isolated from each other and your host machine.
 
 ## Prerequisites
 
 - **Docker Desktop** (macOS) or **Docker Engine** (Linux)
 - **SSH key** loaded in your SSH agent (for GitHub access inside containers)
+- **Caddy** (for friendly `.town` URLs) — `brew install caddy`
 
 ## Quick Start
 
 ```bash
 # Clone this repo
-git clone https://github.com/ajoynern/gastown-docker.git
+git clone https://github.com/aschenoni/gastown-docker.git
 cd gastown-docker
+
+# Point the build at your local gastown checkout (optional — defaults to GitHub)
+echo 'GASTOWN_SRC=/path/to/your/gastown' > .env
 
 # Make the CLI executable and symlink it onto your PATH
 chmod +x gt-docker
@@ -28,6 +32,64 @@ gt up                 # initialize the Gas Town workspace
 gt mayor attach       # start the Mayor
 ```
 
+## Friendly URLs
+
+Set up local DNS and a reverse proxy so each instance is accessible at `<name>.town` in your browser.
+
+### 1. Add hosts entries
+
+```bash
+sudo sh -c 'cat >> /etc/hosts << EOF
+
+# Gas Town Docker instances
+127.0.0.1	mytown.town
+127.0.0.1	terminal.mytown.town
+EOF'
+```
+
+Add a pair of lines for each instance you create.
+
+### 2. Configure ports
+
+Edit `ports.conf` to assign static ports for each instance:
+
+```conf
+mytown.dashboard=8081
+mytown.terminal=7681
+```
+
+### 3. Configure Caddy
+
+Edit the `Caddyfile` to add routes for each instance:
+
+```caddyfile
+mytown.town:80 {
+    reverse_proxy localhost:8081
+}
+
+terminal.mytown.town:80 {
+    reverse_proxy localhost:7681
+}
+```
+
+### 4. Start Caddy
+
+```bash
+sudo caddy start --config /path/to/gastown-docker/Caddyfile
+```
+
+Reload after editing the Caddyfile:
+
+```bash
+sudo caddy reload --config /path/to/gastown-docker/Caddyfile
+```
+
+### Result
+
+| Instance | Dashboard | Terminal (Mayor) |
+|----------|-----------|------------------|
+| mytown | http://mytown.town | http://terminal.mytown.town |
+
 ## Usage
 
 ### Create instances
@@ -42,13 +104,31 @@ gt-docker up charlie
 
 ### Attach to the Mayor
 
-From anywhere on your machine:
+From the command line:
 
 ```bash
 gt-docker mayor alpha
 ```
 
-This connects to the Mayor's tmux session inside the container. If no Mayor session exists yet, it starts one.
+Or in the browser (if ttyd and Caddy are configured):
+
+```
+http://terminal.alpha.town
+```
+
+### Start the dashboard and terminal
+
+The dashboard and browser terminal need to be started inside each container:
+
+```bash
+# Dashboard (serves on port 8080 inside the container)
+gt-docker exec mytown gt dashboard &
+
+# Browser terminal — launches ttyd serving gt mayor attach
+gt-docker exec mytown ttyd -p 7681 -W gt mayor attach &
+```
+
+These run in the background. The Caddy reverse proxy makes them available at `mytown.town` and `terminal.mytown.town`.
 
 ### Other commands
 
@@ -59,22 +139,6 @@ gt-docker exec <instance> <cmd>    # run a command (e.g. gt agents)
 gt-docker logs <instance>          # tail container logs
 gt-docker down <instance>          # stop (keeps data in volumes)
 gt-docker destroy <instance>       # stop and delete all data
-```
-
-### Dashboard
-
-Each instance runs a web dashboard on an auto-assigned port. Start it inside the container:
-
-```bash
-gt-docker exec mytown gt dashboard
-```
-
-Then check `gt-docker list` to see which host port was assigned (the `PORTS` column).
-
-To use a fixed port instead:
-
-```bash
-DASHBOARD_PORT=9090 gt-docker up mytown
 ```
 
 ## How It Works
@@ -123,6 +187,9 @@ Defaults to `TestUser` / `test@example.com` if not set.
 |------|---------|
 | `docker-compose.yml` | Compose template for isolated instances |
 | `gt-docker` | CLI wrapper for managing instances |
+| `ports.conf` | Static port assignments per instance |
+| `Caddyfile` | Reverse proxy config for `.town` URLs |
+| `.env` | Local build source override (not committed) |
 
 The Dockerfile and entrypoint scripts are sourced from the [gastown repository](https://github.com/steveyegge/gastown) at build time.
 

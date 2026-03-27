@@ -9,7 +9,7 @@
 services:
   gastown:
     build:
-      context: https://github.com/steveyegge/gastown.git
+      context: ${GASTOWN_SRC:-https://github.com/steveyegge/gastown.git}
       dockerfile: Dockerfile
     container_name: gastown-${GT_INSTANCE:?Set GT_INSTANCE}
     user: root
@@ -38,6 +38,7 @@ services:
       - /run/host-services/ssh-auth.sock:/run/host-services/ssh-auth.sock
     ports:
       - "${DASHBOARD_PORT:-0}:8080"
+      - "${TERMINAL_PORT:-0}:7681"
     command: sleep infinity
 
 volumes:

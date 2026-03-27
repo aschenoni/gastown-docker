@@ -1,0 +1,23 @@
+avatars.town:80 {
+	reverse_proxy localhost:8081
+}
+
+factorio.town:80 {
+	reverse_proxy localhost:8082
+}
+
+nura.town:80 {
+	reverse_proxy localhost:8083
+}
+
+terminal.avatars.town:80 {
+	reverse_proxy localhost:7681
+}
+
+terminal.factorio.town:80 {
+	reverse_proxy localhost:7682
+}
+
+terminal.nura.town:80 {
+	reverse_proxy localhost:7683
+}

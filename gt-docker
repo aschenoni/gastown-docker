@@ -10,11 +10,28 @@ while [[ -L "$SOURCE" ]]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+PORTS_FILE="$SCRIPT_DIR/ports.conf"
 
 # macOS Docker Desktop puts binaries here
 if [[ -d /Applications/Docker.app/Contents/Resources/bin ]]; then
     export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
 fi
+
+# Look up a static port for an instance from ports.conf
+# Usage: get_port <instance> [dashboard|terminal]
+get_port() {
+    local instance="$1"
+    local type="${2:-dashboard}"
+    if [[ -f "$PORTS_FILE" ]]; then
+        local port
+        port=$(grep -E "^${instance}\.${type}=" "$PORTS_FILE" 2>/dev/null | cut -d= -f2 | tr -d ' ')
+        if [[ -n "$port" ]]; then
+            echo "$port"
+            return
+        fi
+    fi
+    echo "0"  # auto-assign
+}
 
 usage() {
     cat <<'EOF'
@@ -69,11 +86,19 @@ require_running() {
 cmd_up() {
     local instance="$1"
     compose_env "$instance"
+    export DASHBOARD_PORT="${DASHBOARD_PORT:-$(get_port "$instance" dashboard)}"
+    export TERMINAL_PORT="${TERMINAL_PORT:-$(get_port "$instance" terminal)}"
     echo "Starting gastown instance '$instance'..."
     docker compose -f "$COMPOSE_FILE" up -d --build
     echo ""
     echo "Instance '$instance' is running."
-    echo "  Container: $(container_name "$instance")"
+    echo "  Container:  $(container_name "$instance")"
+    if [[ "$DASHBOARD_PORT" != "0" ]]; then
+        echo "  Dashboard:  http://${instance}.town"
+    fi
+    if [[ "$TERMINAL_PORT" != "0" ]]; then
+        echo "  Terminal:   http://terminal.${instance}.town"
+    fi
     echo ""
     echo "First time? Authenticate Claude and initialize:"
     echo "  gt-docker shell $instance"
