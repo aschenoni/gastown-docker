@@ -9,7 +9,7 @@
 services:
   gastown:
     build:
-      context: ${GASTOWN_SRC:-https://github.com/steveyegge/gastown.git}
+      context: .
       dockerfile: Dockerfile
     container_name: gastown-${GT_INSTANCE:?Set GT_INSTANCE}
     user: root

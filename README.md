@@ -15,9 +15,6 @@ Run multiple isolated [Gas Town](https://github.com/steveyegge/gastown) instance
 git clone https://github.com/aschenoni/gastown-docker.git
 cd gastown-docker
 
-# Point the build at your local gastown checkout (optional — defaults to GitHub)
-echo 'GASTOWN_SRC=/path/to/your/gastown' > .env
-
 # Make the CLI executable and symlink it onto your PATH
 chmod +x gt-docker
 ln -sf "$(pwd)/gt-docker" ~/.local/bin/gt-docker   # or /usr/local/bin/
@@ -189,9 +186,11 @@ Defaults to `TestUser` / `test@example.com` if not set.
 | `gt-docker` | CLI wrapper for managing instances |
 | `ports.conf` | Static port assignments per instance |
 | `Caddyfile` | Reverse proxy config for `.town` URLs |
-| `.env` | Local build source override (not committed) |
+| `docker-entrypoint.sh` | Container init (git/dolt config, town setup) |
+| `docker-entrypoint-wrapper.sh` | Root wrapper (SSH socket fix, drops to agent) |
+| `ttyd-mayor.sh` | Browser terminal Mayor attach script |
 
-The Dockerfile and entrypoint scripts are sourced from the [gastown repository](https://github.com/steveyegge/gastown) at build time.
+The Dockerfile clones and builds [Gas Town](https://github.com/steveyegge/gastown) from source at build time.
 
 ## Linux Notes
 
