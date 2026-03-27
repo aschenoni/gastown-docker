@@ -124,8 +124,8 @@ The dashboard and browser terminal need to be started inside each container:
 # Dashboard (serves on port 8080 inside the container)
 gt-docker exec mytown gt dashboard &
 
-# Browser terminal — launches ttyd serving gt mayor attach
-gt-docker exec mytown ttyd -p 7681 -W gt mayor attach &
+# Browser terminal — launches ttyd with smart Mayor attach
+gt-docker exec mytown ttyd -p 7681 -W /app/ttyd-mayor.sh &
 ```
 
 These run in the background. The Caddy reverse proxy makes them available at `mytown.town` and `terminal.mytown.town`.
