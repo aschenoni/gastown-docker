@@ -46,7 +46,7 @@ RUN echo 'export TERM="xterm-256color"' >> /etc/profile.d/term.sh && \
     echo 'export TERM="xterm-256color"' >> /etc/zsh/zshenv
 
 # Tmux config: mouse scroll + large history for browser terminals
-RUN printf 'set -g history-limit 50000\n' > /root/.tmux.conf && \
+RUN printf 'set -g history-limit 50000\nset -g mouse on\nunbind -n MouseDrag1Pane\nunbind -T copy-mode MouseDrag1Pane\nunbind -T copy-mode-vi MouseDrag1Pane\n' > /root/.tmux.conf && \
     cp /root/.tmux.conf /home/agent/.tmux.conf && chown agent:agent /home/agent/.tmux.conf
 
 # Root-owned wrapper that fixes SSH socket perms then drops to agent
