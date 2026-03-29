@@ -64,6 +64,10 @@ COPY --chown=agent:agent docker-entrypoint.sh /app/docker-entrypoint.sh
 COPY --chown=agent:agent ttyd-mayor.sh /app/ttyd-mayor.sh
 RUN chmod +x /app/docker-entrypoint.sh /app/ttyd-mayor.sh
 
+# Custom formulas and plugins — installed into town workspace by entrypoint
+COPY --chown=agent:agent formulas/ /app/custom-formulas/
+COPY --chown=agent:agent plugins/ /app/custom-plugins/
+
 WORKDIR /gt
 
 ENTRYPOINT ["tini", "--", "/app/docker-entrypoint-wrapper.sh"]

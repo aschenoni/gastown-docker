@@ -1,0 +1,837 @@
+description = """
+Strategic project pulse: cross-rig assessment of project health, business
+health, and metrics fitness. Designed for founder use after breaks or as
+a weekly check-in.
+
+Produces and maintains a living assessment document at the town level that
+always reflects current state. Each session updates the document rather than
+creating a new one.
+
+## When to use
+
+- After a break (days or weeks away from the project)
+- Weekly strategic check-in
+- Before making prioritization decisions
+- Before investor/partner meetings
+- When something feels "off" but you can't pinpoint what
+
+## Data sources
+
+Structured:
+- Codebase state (per-rig git log, test coverage, CI health)
+- Beads (open/closed/blocked across all rigs, convoys, brainstorms)
+- Linear tickets (backlog, velocity, stale items)
+- Specs (inventory, completion status, deferred items)
+
+Unstructured (human provides or agent reads from Notion):
+- Meeting transcripts (key decisions, commitments, pivot signals)
+- Founder conversations (market intel, customer feedback, strategic shifts)
+- Notion workspace (product docs, GTM plans, competitive analysis)
+
+## Pipeline
+
+```
+[orient]                 Check: does a living assessment exist? When was it
+                         last updated? What changed since then?
+      ↓
+[gather-structured]      Pull data from code, beads, Linear, specs across all rigs
+      ↓
+[gather-unstructured]    Ask human for recent context: meetings, conversations,
+                         market intel, customer feedback. Read from Notion if available.
+      ↓
+[assess-project]         Technical health across all rigs: shipped, in-flight,
+                         blocked, degraded, gaps
+      ↓
+[assess-business]        GTM readiness, value prop, competitive position,
+                         revenue model, user feedback themes
+      ↓
+[assess-metrics]         Are we measuring the right things? Are measurements
+                         accurate? Flag gaps and staleness.
+      ↓
+[synthesize]             Cross-reference: where do technical gaps threaten
+                         business goals? Where do business shifts invalidate
+                         project priorities?
+      ↓
+[recommend]              Prioritized focus areas with reasoning from all three lenses
+      ↓
+[human-session]          INTERACTIVE: walk through briefing, challenge, add context
+      ↓
+[update-assessment]      Incorporate human input, update living doc, adjust priorities
+      ↓
+[persist]                Create action beads, update memories, feed into
+                         brainstorm/spec pipeline as needed
+```
+
+## Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| town_name | no | Name for this town's assessment (default: directory name) |
+| focus | no | Specific area to focus on (e.g., "GTM", "metrics", "nura health") |
+| transcript | no | Path to recent meeting transcript to incorporate |
+"""
+formula = "mol-project-pulse"
+type = "workflow"
+version = 1
+pour = true
+
+# ==============================================================================
+# STEP 1: ORIENT
+# ==============================================================================
+
+[[steps]]
+id = "orient"
+title = "Orient: what exists, what changed, how long has it been?"
+description = """
+Get your bearings before diving into assessment.
+
+**1. Check for existing assessment:**
+```bash
+ls mayor/pulse/ 2>/dev/null
+cat mayor/pulse/assessment.md 2>/dev/null | head -20
+```
+
+If `mayor/pulse/assessment.md` exists, read it. Note:
+- When it was last updated
+- What the previous focus recommendations were
+- What decisions were made last session
+
+If it doesn't exist, this is the first pulse. Create the directory:
+```bash
+mkdir -p mayor/pulse/
+```
+
+**2. Survey what changed since last assessment:**
+
+For each rig in the town:
+```bash
+cat rigs.json  # list all rigs
+```
+
+For each rig, quick scan:
+```bash
+# Recent git activity
+git -C <rig>/crew/aj log --oneline --since="<last-assessment-date>" | head -20
+
+# Bead activity
+bd list --all --status=closed --created-after=<last-assessment-date> | wc -l
+bd list --all --status=open | wc -l
+```
+
+**3. Check brainstorm beads:**
+```bash
+bd list --all -l category:brainstorm --status=open
+```
+Any parked items that should inform this assessment?
+
+**4. Check recent escalations:**
+```bash
+bd list --all -l severity:HIGH --created-after=<last-assessment-date>
+bd list --all -l severity:CRITICAL --created-after=<last-assessment-date>
+```
+
+**5. Present orientation to human:**
+
+```
+## Pulse Orientation
+
+**Last assessment:** <date, or "first time">
+**Days since last pulse:** N
+**Town rigs:** <list>
+
+### What changed
+- <rig>: N commits, N beads closed, N still open
+- <rig>: N commits, N beads closed, N still open
+
+### Open items from last session
+- <previous recommendation 1>: <status>
+- <previous recommendation 2>: <status>
+
+### Active brainstorms
+- <topic>: <outcome status>
+
+### Recent escalations
+- <any HIGH/CRITICAL since last assessment>
+
+---
+Anything specific you want to focus on today?
+```
+
+Wait for human response. If they have a specific focus, note it.
+
+**Exit criteria:** Orientation complete. Human has provided focus (or "general pulse").
+Previous assessment loaded (if exists).
+"""
+
+# ==============================================================================
+# STEP 2: GATHER STRUCTURED DATA
+# ==============================================================================
+
+[[steps]]
+id = "gather-structured"
+title = "Pull structured data from code, beads, Linear, specs"
+needs = ["orient"]
+description = """
+Collect quantitative data from all structured sources across all rigs.
+
+**1. Per-rig codebase health:**
+
+For each rig:
+```bash
+# Recent activity volume
+git -C <rig>/crew/aj log --oneline --since="30 days ago" | wc -l
+
+# Test health (if test suite exists)
+cd <rig>/crew/aj && npm run test 2>&1 | tail -5  # or equivalent
+
+# Build health
+cd <rig>/crew/aj && npm run build 2>&1 | tail -5  # or equivalent
+
+# Dependency freshness
+cd <rig>/crew/aj && npm outdated 2>/dev/null | wc -l
+```
+
+**2. Bead state (town-wide):**
+```bash
+# Overall pipeline health
+bd list --all --status=open --format=json > /tmp/pulse-beads-open.json
+bd list --all --status=closed --created-after=-30d --format=json > /tmp/pulse-beads-closed.json
+
+# Blocked work
+bd blocked
+
+# Convoy status
+gt convoy list
+
+# Epic progress
+bd list --all --type=epic --status=open
+```
+
+**3. Linear state:**
+Query via Linear MCP tools:
+- Open tickets by project/status
+- Tickets not updated in >14 days (stale)
+- Tickets with no assignee
+- Recently completed vs created ratio (velocity indicator)
+
+**4. Spec inventory:**
+```bash
+# Read PRODUCT.md for feature inventory
+cat <rig>/crew/aj/PRODUCT.md 2>/dev/null
+
+# Check spec completion status
+find . -name "*.md" -path "*/specs*" -exec grep -l "Implementation Notes" {} \;  # completed specs
+find . -name "*.md" -path "*/specs*" | wc -l  # total specs
+```
+
+**5. Quality indicators:**
+```bash
+# Quality review scores (if available)
+bd list --all -l plugin:quality-review-result --created-after=-30d --format=json
+```
+
+**6. Write structured data summary to:**
+```bash
+mayor/pulse/data-structured.md
+```
+
+Include raw numbers and brief interpretation. Don't editorialize yet —
+that's for the assess steps.
+
+**Exit criteria:** Structured data collected from all rigs and sources.
+Summary written to data-structured.md.
+"""
+
+# ==============================================================================
+# STEP 3: GATHER UNSTRUCTURED DATA
+# ==============================================================================
+
+[[steps]]
+id = "gather-unstructured"
+title = "Gather unstructured context from human and Notion"
+needs = ["orient"]
+description = """
+This step captures the context that only lives in human conversations,
+meeting transcripts, and Notion documents.
+
+**1. If a transcript was provided ({{transcript}}):**
+```bash
+cat {{transcript}}
+```
+Extract:
+- Decisions made
+- Commitments to partners/customers/investors
+- Pivot signals or strategic shifts
+- Customer feedback mentioned
+- Competitive intel mentioned
+- Timelines or deadlines set
+
+**2. Ask the human for recent context:**
+
+```
+## Context Gathering
+
+I've pulled the structured data (code, beads, Linear). Now I need the
+soft context that lives in your conversations and observations.
+
+Please share anything relevant from the last <N days> — whatever comes
+to mind. Some prompts:
+
+**Customer/User signals:**
+- Any feedback from users or prospects?
+- Feature requests that keep coming up?
+- Complaints or churn signals?
+
+**Market/Competitive:**
+- Anything competitors shipped recently?
+- Market shifts or new opportunities?
+- Partnership conversations?
+
+**Founder discussions:**
+- Key decisions made between founders?
+- Disagreements or open debates?
+- Priorities shifted?
+
+**Gut feel:**
+- What's worrying you?
+- What feels like it's working?
+- What would you show an investor today vs hide?
+
+Take your time. Stream of consciousness is fine.
+```
+
+Wait for human response. Take detailed notes.
+
+**3. Check Notion (if MCP available):**
+Search for recently updated pages in product, strategy, or GTM sections.
+
+**4. Write unstructured context to:**
+```bash
+mayor/pulse/data-unstructured.md
+```
+
+Organize by: decisions, commitments, feedback, competitive, strategy, gut-feel.
+
+**Exit criteria:** Human has shared recent context. Transcript processed (if provided).
+Notion checked. Unstructured data documented.
+"""
+
+# ==============================================================================
+# STEP 4: ASSESS PROJECT
+# ==============================================================================
+
+[[steps]]
+id = "assess-project"
+title = "Assess technical/project health across all rigs"
+needs = ["gather-structured", "gather-unstructured"]
+description = """
+Synthesize structured data into a project health assessment.
+
+**Read:**
+```bash
+cat mayor/pulse/data-structured.md
+cat mayor/pulse/data-unstructured.md
+```
+
+**Produce assessment covering:**
+
+### Shipped & Stable
+What's built, working, and not a concern? Include:
+- Features with passing tests
+- Specs marked complete with implementation notes
+- Areas with good quality review scores
+
+### In-Flight
+What's actively being worked on? Include:
+- Open convoys with progress %
+- Active polecats and their beads
+- PRs in review
+
+### Blocked / At Risk
+What's stuck or degrading? Include:
+- Blocked beads (and what blocks them)
+- Stale Linear tickets (>14 days untouched)
+- CI failures or flaky tests
+- Dependencies that are significantly outdated
+- Tech debt that's compounding
+
+### Gaps
+What's planned or needed but not started? Include:
+- Specs without implementation beads
+- Features in PRODUCT.md marked "Not Started"
+- Items deferred from completed specs (follow-up beads)
+- Brainstorm items still parked
+
+### Cross-Rig Dependencies
+If work in one rig depends on another, flag it.
+
+**Write to:** `mayor/pulse/assess-project.md`
+
+**Exit criteria:** Project assessment written with all five sections populated.
+Based on real data, not generalities.
+"""
+
+# ==============================================================================
+# STEP 5: ASSESS BUSINESS
+# ==============================================================================
+
+[[steps]]
+id = "assess-business"
+title = "Assess business health and GTM readiness"
+needs = ["gather-structured", "gather-unstructured"]
+description = """
+Assess the business dimensions that technical work serves.
+
+**Read the unstructured context carefully** — this is where most business
+signal lives.
+
+**Produce assessment covering:**
+
+### Value Proposition
+- What problem do we solve?
+- How clearly can we articulate it? (if it's fuzzy, that's a finding)
+- Has the value prop shifted since last assessment?
+
+### GTM Readiness Checklist
+Rate each (Ready / Partial / Not Started / N/A):
+- [ ] Core product functionality complete enough to demo
+- [ ] Pricing/packaging defined
+- [ ] Landing page / marketing site
+- [ ] Onboarding flow for new users
+- [ ] Documentation for users
+- [ ] Support channel established
+- [ ] Analytics/tracking in place
+- [ ] Legal (terms, privacy policy)
+- [ ] Payment processing
+- [ ] First 10 potential customers identified
+
+### Competitive Position
+- Who else is in this space?
+- What's our differentiation?
+- What have competitors shipped recently? (from human context)
+- Where are we behind? Where are we ahead?
+
+### User/Customer Feedback Themes
+- Top 3 things users/prospects are asking for
+- Top 3 complaints or friction points
+- Signals about willingness to pay
+
+### Revenue Model
+- How do we make money?
+- Is the model validated?
+- What assumptions are untested?
+
+### Strategic Risks
+- What could kill this project?
+- What are we assuming that might be wrong?
+- Where are we most exposed?
+
+**Write to:** `mayor/pulse/assess-business.md`
+
+**Important:** Be honest. If information is missing (e.g., no customer feedback
+exists), say so. Gaps in business knowledge are findings, not failures.
+
+**Exit criteria:** Business assessment written. Missing information flagged
+explicitly rather than glossed over.
+"""
+
+# ==============================================================================
+# STEP 6: ASSESS METRICS
+# ==============================================================================
+
+[[steps]]
+id = "assess-metrics"
+title = "Assess metrics fitness: right things measured accurately?"
+needs = ["gather-structured"]
+description = """
+Evaluate whether we're tracking the right metrics and whether those
+measurements are trustworthy.
+
+**1. Inventory current metrics:**
+
+Check for metrics definitions in:
+```bash
+cat mayor/pulse/metrics.md 2>/dev/null       # from previous pulses
+cat <rig>/crew/aj/PRODUCT.md 2>/dev/null     # product-level metrics
+# Check for analytics config in codebase
+find . -name "analytics*" -o -name "tracking*" -o -name "metrics*" | head -20
+```
+
+If no metrics are formally defined, that IS the finding. Flag it.
+
+**2. For each metric that exists, assess:**
+
+| Dimension | Question |
+|-----------|----------|
+| Relevance | Does this metric still matter for our current goals? |
+| Accuracy | Is the measurement implementation correct? When was it last verified? |
+| Freshness | Is the data current or stale? |
+| Actionability | Would a change in this metric cause us to do something different? |
+| Completeness | Are we missing metrics for important areas? |
+
+**3. Flag metric gaps:**
+
+Areas that typically need metrics but might not have them:
+- **Product**: active users, feature adoption, retention, time-to-value
+- **Technical**: test coverage, build times, error rates, API latency
+- **Business**: conversion rate, revenue, CAC, LTV, churn
+- **Operational**: deploy frequency, incident rate, mean time to recovery
+
+For each gap, note:
+- Is this gap urgent? (affecting decisions we need to make now)
+- Is it addressable? (can we instrument it, or is it fundamentally hard to measure)
+- Suggested approach to close the gap
+
+**4. Produce the metrics assessment:**
+
+Write or update `mayor/pulse/metrics.md`:
+
+```markdown
+# Metrics Health
+
+## Currently Tracked
+| Metric | Source | Last Verified | Confidence | Actionable? |
+|--------|--------|---------------|------------|-------------|
+
+## Stale / Broken
+| Metric | Issue | Impact | Fix Effort |
+|--------|-------|--------|-----------|
+
+## Missing (Recommended)
+| Area | Metric | Why | Priority | Effort |
+|------|--------|-----|----------|--------|
+
+## Metrics Maturity
+<overall assessment: "We're flying blind in X area" or "Good coverage but
+Y metric is misleading because Z">
+```
+
+**Exit criteria:** Metrics inventory complete. Gaps identified. Stale/broken
+metrics flagged. Overall maturity assessed.
+"""
+
+# ==============================================================================
+# STEP 7: SYNTHESIZE
+# ==============================================================================
+
+[[steps]]
+id = "synthesize"
+title = "Cross-reference all three assessments"
+needs = ["assess-project", "assess-business", "assess-metrics"]
+description = """
+The three assessments are lenses on the same reality. This step finds
+the connections and conflicts between them.
+
+**Read all three:**
+```bash
+cat mayor/pulse/assess-project.md
+cat mayor/pulse/assess-business.md
+cat mayor/pulse/metrics.md
+```
+
+**Look for:**
+
+### Technical gaps threatening business goals
+- "We plan to launch in 6 weeks but the onboarding flow isn't started"
+- "Customers are asking for X but it's blocked by tech debt in Y"
+- "Our competitive advantage depends on Z but that spec is still parked"
+
+### Business shifts invalidating project priorities
+- "We're building feature A but customer feedback says they need B"
+- "The market shifted toward X but our roadmap is still aimed at Y"
+- "A competitor shipped Z which changes our differentiation story"
+
+### Metrics blind spots hiding real problems
+- "We think retention is fine but we're not actually measuring it"
+- "Build times doubled but nobody noticed because we don't track them"
+- "Revenue metric looks healthy but it's based on one customer"
+
+### Alignment checks
+- "The work we're doing maps to our stated goals" (good)
+- "We're spending 60% of effort on X but X is only 10% of revenue" (misaligned)
+- "Our top business risk has no project work addressing it" (gap)
+
+**Write to:** `mayor/pulse/synthesis.md`
+
+Structure:
+1. Top 3 cross-cutting concerns (the things that matter most)
+2. Alignment assessment (are we working on the right things?)
+3. Emerging risks (things getting worse quietly)
+4. Opportunities spotted (things to capitalize on)
+
+**Exit criteria:** Synthesis complete with cross-references between all three
+assessment areas. Not just a summary — actual insight about interactions.
+"""
+
+# ==============================================================================
+# STEP 8: RECOMMEND
+# ==============================================================================
+
+[[steps]]
+id = "recommend"
+title = "Produce prioritized focus recommendations"
+needs = ["synthesize"]
+description = """
+Convert synthesis into actionable recommendations.
+
+**Read:**
+```bash
+cat mayor/pulse/synthesis.md
+```
+
+**Produce 3-5 ranked recommendations:**
+
+For each recommendation:
+```markdown
+### 1. <Title> [Priority: Critical/High/Medium]
+
+**What:** <specific action or decision needed>
+**Why:** <evidence from project + business + metrics assessments>
+**Impact:** <what changes if we do this>
+**Risk of inaction:** <what happens if we don't>
+**Effort:** <S/M/L estimate>
+**Suggested approach:** <brainstorm? spec? direct execution? metrics work?>
+```
+
+**Rules for recommendations:**
+- Each must reference evidence from at least two of the three assessments
+- Don't recommend more than 5 things (focus is the point)
+- Include at least one "stop doing" or "deprioritize" recommendation if warranted
+- If metrics are immature, one recommendation should be about establishing them
+- Recommendations should be at the right altitude — strategic, not tactical
+  ("Establish onboarding funnel metrics" not "Add a pageview tracker to signup.tsx")
+
+**Write recommendations to:** `mayor/pulse/recommendations.md`
+
+**Exit criteria:** 3-5 prioritized recommendations, each grounded in evidence
+from multiple assessment areas.
+"""
+
+# ==============================================================================
+# STEP 9: HUMAN SESSION
+# ==============================================================================
+
+[[steps]]
+id = "human-session"
+title = "Interactive briefing with human"
+needs = ["recommend"]
+description = """
+This is the core of the pulse — an interactive session where you walk the
+human through the assessment and they challenge, add context, and decide.
+
+**1. Present the briefing:**
+
+```
+## Project Pulse: <town name>
+**Date:** <today>
+**Since last pulse:** <N days>
+
+### Top-Line
+<3 sentences: overall state, biggest risk, biggest opportunity>
+
+### Recommendations (from analysis)
+1. <title> — <one line>
+2. <title> — <one line>
+3. <title> — <one line>
+
+### Project Health Snapshot
+<2-3 most important findings from project assessment>
+
+### Business Health Snapshot
+<2-3 most important findings from business assessment>
+
+### Metrics Status
+<overall maturity + top gaps>
+
+---
+I have detailed assessments for each area. Where do you want to dig in?
+Or walk through the recommendations?
+```
+
+**2. Be a strategic thinking partner:**
+
+During this conversation:
+- Answer questions by referencing the detailed assessments
+- Challenge the human's assumptions with data when appropriate
+- Help them think through trade-offs ("If we prioritize A, B gets delayed by...")
+- Take notes on decisions made and reasoning
+- Flag when a decision contradicts the data (but defer to human judgment)
+- Help them articulate things they're sensing but can't yet define
+
+**3. Capture decisions:**
+As the human makes decisions (even tentative ones), note them:
+- What was decided
+- What the reasoning was
+- What it affects
+- What the next action is
+
+**4. The human ends this step** when they feel oriented and have made
+their priority decisions. Don't rush them.
+
+**Exit criteria:** Human has reviewed the assessment, made priority decisions,
+and is ready to update the living document.
+"""
+
+# ==============================================================================
+# STEP 10: UPDATE ASSESSMENT
+# ==============================================================================
+
+[[steps]]
+id = "update-assessment"
+title = "Update the living assessment document"
+needs = ["human-session"]
+description = """
+Incorporate everything from this session into the living assessment document.
+
+**1. Write or update `mayor/pulse/assessment.md`:**
+
+```markdown
+# State of <Town Name>
+
+**Last Updated:** <today>
+**Pulse #:** <session number>
+
+## Executive Summary
+<3-5 sentences reflecting the CURRENT state after this session's decisions>
+
+## Project Health
+### Shipped & Stable
+<from assess-project, current>
+
+### In-Flight
+<from assess-project, current>
+
+### Blocked / At Risk
+<from assess-project, current — remove items resolved since last pulse>
+
+### Gaps
+<from assess-project, current>
+
+## Business Health
+### Value Proposition
+<current articulation>
+
+### GTM Readiness
+<checklist with current status>
+
+### Competitive Position
+<current assessment>
+
+### Customer/User Signals
+<current feedback themes>
+
+### Revenue Model
+<current status>
+
+## Metrics
+| Metric | Target | Current | Last Verified | Confidence |
+|--------|--------|---------|---------------|------------|
+<current metrics table>
+
+### Metrics Gaps
+<prioritized list of what we should be measuring but aren't>
+
+## Focus Areas (Current)
+<from this session's decisions, not the raw recommendations>
+1. <what> — <why> — <next action>
+2. <what> — <why> — <next action>
+3. <what> — <why> — <next action>
+
+## Decision Log
+| Date | Decision | Rationale | Impact |
+|------|----------|-----------|--------|
+<append this session's decisions>
+
+## Session History
+| Date | Pulse # | Key Topics | Decisions Made |
+|------|---------|------------|----------------|
+<append this session>
+```
+
+**2. Clean up working files:**
+The detailed assessment files (assess-project.md, assess-business.md, etc.)
+remain in `mayor/pulse/` as supporting detail. They get overwritten next pulse.
+
+**Exit criteria:** Living assessment document updated with current state.
+Decision log appended. Session history recorded.
+"""
+
+# ==============================================================================
+# STEP 11: PERSIST
+# ==============================================================================
+
+[[steps]]
+id = "persist"
+title = "Create action items and persist learnings"
+needs = ["update-assessment"]
+description = """
+Turn decisions into trackable work and persist strategic learnings.
+
+**1. Create beads for action items:**
+For each decision that requires work:
+```bash
+bd create "<action title>" --type=task --description="
+From Project Pulse #<N> on <date>.
+
+Decision: <what was decided>
+Rationale: <why>
+Priority: <from recommendations>
+" \
+  -l category:pulse-action \
+  -l priority:<level>
+```
+
+**2. Feed into existing pipelines:**
+- If a decision warrants a brainstorm → note it for `mol-brainstorm`
+- If a decision produced a clear spec direction → note it for `mol-spec-lifecycle`
+- If a decision requires metric instrumentation → create a specific bead
+
+**3. Update memories (conservative):**
+Only persist strategic insights that pass the 3-month test.
+
+Good examples:
+- "Customers consistently ask for CSV export before API access"
+- "Competitor X launched feature Y, changing our differentiation angle"
+- "The billing module is the highest-risk area — no tests, handles money"
+
+Bad examples:
+- "We decided to focus on onboarding" (that's in the decision log, not memory)
+- "Revenue is low" (ephemeral state, not a durable insight)
+
+**4. If this is the first pulse (no prior metrics):**
+Create a dedicated bead for establishing metrics:
+```bash
+bd create "Establish project metrics baseline" --type=task --description="
+First pulse identified metrics gaps. Priority areas:
+<list from metrics assessment>
+"
+```
+
+**5. Commit assessment updates:**
+```bash
+git add mayor/pulse/
+git commit -m "pulse: update project assessment #<N>"
+```
+
+**Exit criteria:** Action beads created. Memories written if warranted.
+Assessment committed to git.
+"""
+
+# ==============================================================================
+# VARIABLES
+# ==============================================================================
+
+[vars.town_name]
+description = "Name for this town's assessment (defaults to directory name)"
+required = false
+default = ""
+
+[vars.focus]
+description = "Specific area to focus on (e.g., 'GTM', 'metrics', 'nura health')"
+required = false
+default = ""
+
+[vars.transcript]
+description = "Path to recent meeting transcript to incorporate"
+required = false
+default = ""

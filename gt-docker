@@ -46,6 +46,10 @@ Usage:
   gt-docker exec <instance> <cmd..>  Run a command in the container
   gt-docker list                     List running gastown containers
   gt-docker logs <instance>          Tail container logs
+  gt-docker formulas list            List custom formulas
+  gt-docker formulas add <file>      Add a formula to the collection
+  gt-docker formulas sync <instance> Push formulas to a running instance
+  gt-docker formulas sync --all      Push to all running instances
 
 Environment:
   GIT_USER       Git user.name  (default: TestUser)
@@ -100,12 +104,14 @@ cmd_up() {
         echo "  Terminal:   http://terminal.${instance}.town"
     fi
     echo ""
-    echo "First time? Authenticate Claude and initialize:"
+    echo "Services (Dolt, Daemon, Deacon, Mayor, Dashboard, Terminal)"
+    echo "start automatically inside the container."
+    echo ""
+    echo "First time? Authenticate Claude:"
     echo "  gt-docker shell $instance"
     echo "  claude login"
-    echo "  gt up && gt mayor attach"
     echo ""
-    echo "Already initialized? Attach directly:"
+    echo "Attach to Mayor:"
     echo "  gt-docker mayor $instance"
 }
 
@@ -175,6 +181,114 @@ cmd_logs() {
     docker logs -f "$cname"
 }
 
+sync_to_instance() {
+    local cname="$1"
+    local inst="$2"
+
+    # Sync formulas
+    for f in "$SCRIPT_DIR/formulas"/*.formula.toml; do
+        [ -f "$f" ] || continue
+        docker cp "$f" "$cname:/gt/.beads/formulas/"
+    done
+
+    # Sync plugins (each plugin is a directory)
+    for plugin_dir in "$SCRIPT_DIR/plugins"/*/; do
+        [ -d "$plugin_dir" ] || continue
+        local plugin_name
+        plugin_name="$(basename "$plugin_dir")"
+        docker exec "$cname" mkdir -p "/gt/plugins/$plugin_name" 2>/dev/null || true
+        for f in "$plugin_dir"*; do
+            [ -f "$f" ] || continue
+            docker cp "$f" "$cname:/gt/plugins/$plugin_name/"
+        done
+    done
+}
+
+cmd_formulas() {
+    local subcmd="${1:-list}"
+    shift 2>/dev/null || true
+
+    case "$subcmd" in
+        list|ls)
+            echo "Custom formulas in $SCRIPT_DIR/formulas/:"
+            echo ""
+            for f in "$SCRIPT_DIR/formulas"/*.formula.toml; do
+                [ -f "$f" ] || { echo "  (none)"; break; }
+                local name
+                name="$(basename "$f" .formula.toml)"
+                local desc
+                desc=$(grep -m1 '^formula' "$f" 2>/dev/null | cut -d'"' -f2)
+                printf "  %-30s %s\n" "$name" "$desc"
+            done
+            echo ""
+            echo "Custom plugins in $SCRIPT_DIR/plugins/:"
+            echo ""
+            for d in "$SCRIPT_DIR/plugins"/*/; do
+                [ -d "$d" ] || { echo "  (none)"; break; }
+                local pname
+                pname="$(basename "$d")"
+                local pdesc
+                pdesc=$(grep -m1 '^description' "$d/plugin.md" 2>/dev/null | cut -d'"' -f2)
+                printf "  %-30s %s\n" "$pname" "$pdesc"
+            done
+            ;;
+        sync)
+            local instance="$1"
+            if [[ -z "$instance" ]]; then
+                echo "Usage: gt-docker formulas sync <instance|--all>" >&2
+                exit 1
+            fi
+            if [[ "$instance" == "--all" ]]; then
+                echo "Syncing formulas and plugins to all running instances..."
+                for cname in $(docker ps --filter "name=gastown-" --format "{{.Names}}"); do
+                    local inst="${cname#gastown-}"
+                    echo "  → $inst"
+                    sync_to_instance "$cname" "$inst"
+                done
+                echo "Done."
+            else
+                local cname
+                cname="$(container_name "$instance")"
+                require_running "$instance"
+                echo "Syncing formulas and plugins to instance '$instance'..."
+                sync_to_instance "$cname" "$instance"
+                echo "  Formulas:"
+                for f in "$SCRIPT_DIR/formulas"/*.formula.toml; do
+                    [ -f "$f" ] || continue
+                    echo "    → $(basename "$f")"
+                done
+                echo "  Plugins:"
+                for d in "$SCRIPT_DIR/plugins"/*/; do
+                    [ -d "$d" ] || continue
+                    echo "    → $(basename "$d")/"
+                done
+                echo "Done."
+            fi
+            ;;
+        add)
+            local formula_path="$1"
+            if [[ -z "$formula_path" || ! -f "$formula_path" ]]; then
+                echo "Usage: gt-docker formulas add <path-to-formula.toml>" >&2
+                exit 1
+            fi
+            cp "$formula_path" "$SCRIPT_DIR/formulas/"
+            echo "Added $(basename "$formula_path") to custom formulas."
+            echo "Run 'gt-docker formulas sync --all' to push to running instances."
+            ;;
+        *)
+            cat <<'FEOF'
+gt-docker formulas — manage custom formulas and plugins
+
+Usage:
+  gt-docker formulas list                List custom formulas and plugins
+  gt-docker formulas add <file>          Add a formula to the collection
+  gt-docker formulas sync <instance>     Push formulas + plugins to a running instance
+  gt-docker formulas sync --all          Push to all running instances
+FEOF
+            ;;
+    esac
+}
+
 # --- main ---
 
 [[ $# -lt 1 ]] && usage
@@ -213,6 +327,9 @@ case "$cmd" in
     logs)
         [[ $# -lt 1 ]] && { echo "Usage: gt-docker logs <instance>" >&2; exit 1; }
         cmd_logs "$1"
+        ;;
+    formulas|formula)
+        cmd_formulas "$@"
         ;;
     help|--help|-h)
         usage
