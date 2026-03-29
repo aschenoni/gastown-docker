@@ -1,0 +1,322 @@
+description = """
+Automated PR lifecycle for a single bead targeting a feature branch.
+
+Implements code changes, opens a PR against the feature branch, ensures CI
+passes (with self-healing fix loops), and signals readiness for refinery
+auto-merge. No human review gate — that happens once at the feature branch
+level, not per-PR.
+
+## Pipeline
+
+```
+[implement]       Make code changes per bead instructions
+      ↓
+[pre-verify]      Run local gates: build, lint, typecheck, tests
+      ↓
+[push-and-pr]     Push branch, open PR targeting {{target_branch}}
+      ↓
+[await-ci]        Poll CI until green
+      ↓
+[fix-if-failed]   If CI red: diagnose, fix, re-push → loop to await-ci
+      ↓
+[signal-ready]    Notify witness/refinery that PR is merge-ready
+```
+
+## Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| issue | yes | Bead ID of the work item |
+| target_branch | yes | Feature branch to target (e.g., feat/bayou-energy-migration) |
+| spec_path | no | Path to the spec file for implementation context |
+| linear_ticket | no | Linear ticket ID (e.g., NUR-42) for status updates |
+
+## Design Decisions
+
+- **No human review gate.** Individual PRs merge to the feature branch
+  automatically. Human reviews the integrated feature branch → main PR once.
+- **Fix loop has a circuit breaker.** After 3 failed CI attempts, the polecat
+  escalates to the Witness rather than looping forever.
+- **PR description is structured.** Every PR includes: bead ID, spec reference,
+  Linear ticket, what changed, how to verify. This makes the final feature
+  branch review easier because each PR is self-documenting.
+- **Linear status updated to "In Progress" on PR open**, not on bead assignment.
+  This reflects actual visible work, not internal scheduling.
+"""
+formula = "mol-pr-lifecycle"
+type = "workflow"
+version = 1
+
+# ==============================================================================
+# STEP 1: IMPLEMENT
+# ==============================================================================
+
+[[steps]]
+id = "implement"
+title = "Implement code changes for the bead"
+description = """
+Read the bead and implement the required changes.
+
+**1. Load context:**
+```bash
+bd show {{issue}}                        # Read bead description + acceptance criteria
+```
+
+If `{{spec_path}}` is provided, read the spec for broader context:
+```bash
+cat {{spec_path}}
+```
+
+**2. Create working branch:**
+```bash
+git checkout {{target_branch}}
+git pull origin {{target_branch}}
+git checkout -b {{issue}}/implement       # e.g., nu-abc/implement
+```
+
+**3. Implement:**
+Follow the bead's description and acceptance criteria exactly. Reference the
+spec for design decisions and constraints. Do not add features beyond what the
+bead specifies — scope creep gets caught in review rounds.
+
+**4. Commit with structured message:**
+```
+<type>(<scope>): <description>
+
+Bead: {{issue}}
+Linear: {{linear_ticket}}
+Spec: {{spec_path}}
+```
+
+**Exit criteria:** Code changes committed on working branch. All acceptance
+criteria from the bead are addressed in the implementation.
+"""
+
+# ==============================================================================
+# STEP 2: PRE-VERIFY
+# ==============================================================================
+
+[[steps]]
+id = "pre-verify"
+title = "Run local gates before pushing"
+needs = ["implement"]
+description = """
+Run the full local gate suite to catch issues before CI.
+
+**Run all gates in sequence:**
+```bash
+npm run build          # Must succeed
+npm run lint           # Must pass with zero errors (warnings OK)
+npm run typecheck      # If available — must pass
+npm run test           # Unit tests must pass
+```
+
+**If any gate fails:**
+1. Read the error output carefully
+2. Fix the issue in your working branch
+3. Commit the fix: `fix(<scope>): resolve <gate> failure`
+4. Re-run the failing gate to confirm
+5. Re-run ALL gates to check for regressions
+
+**Do NOT skip gates or mark them as "expected failures."**
+
+**Exit criteria:** All local gates pass. `git status` shows clean working tree.
+"""
+
+# ==============================================================================
+# STEP 3: PUSH AND OPEN PR
+# ==============================================================================
+
+[[steps]]
+id = "push-and-pr"
+title = "Push branch and open PR targeting feature branch"
+needs = ["pre-verify"]
+description = """
+Push the working branch and open a GitHub PR targeting `{{target_branch}}`.
+
+**1. Push:**
+```bash
+git push -u origin {{issue}}/implement
+```
+
+**2. Open PR with structured description:**
+```bash
+gh pr create \
+  --base {{target_branch}} \
+  --title "<type>(<scope>): <concise description>" \
+  --body "$(cat <<'PRBODY'
+## Context
+
+**Bead:** {{issue}}
+**Linear:** {{linear_ticket}}
+**Spec:** {{spec_path}}
+
+## Changes
+
+<2-5 bullet points describing what changed and why>
+
+## Acceptance Criteria
+
+<paste from bead, with checkboxes>
+- [ ] Criterion 1
+- [ ] Criterion 2
+
+## How to Verify
+
+<specific steps someone reviewing the feature branch can take to verify this PR's contribution>
+
+## Test Coverage
+
+<what tests were added/modified, what they cover>
+PRBODY
+)"
+```
+
+**3. Record the PR number:**
+```bash
+PR_NUMBER=$(gh pr view --json number -q .number)
+echo "pr_number=${PR_NUMBER}" >> .pr-state/{{issue}}.env
+```
+
+**4. Update Linear status (if ticket provided):**
+If `{{linear_ticket}}` is set, update Linear ticket status to "In Progress".
+
+**Exit criteria:** PR is open targeting `{{target_branch}}`. PR number recorded.
+PR description includes all required sections.
+"""
+
+# ==============================================================================
+# STEP 4: AWAIT CI
+# ==============================================================================
+
+[[steps]]
+id = "await-ci"
+title = "Wait for CI to pass"
+needs = ["push-and-pr"]
+description = """
+Poll GitHub CI checks until they complete.
+
+**1. Load PR number:**
+```bash
+source .pr-state/{{issue}}.env
+```
+
+**2. Wait for checks:**
+```bash
+gh pr checks ${PR_NUMBER} --watch --fail-fast
+```
+
+**3. Evaluate result:**
+- If ALL checks pass → proceed to signal-ready
+- If ANY check fails → proceed to fix-if-failed
+
+**Exit criteria:** CI checks have completed (pass or fail). Result is known.
+"""
+
+# ==============================================================================
+# STEP 5: FIX IF CI FAILED
+# ==============================================================================
+
+[[steps]]
+id = "fix-if-failed"
+title = "Diagnose and fix CI failures (up to 3 attempts)"
+needs = ["await-ci"]
+description = """
+If CI passed, skip this step entirely and proceed to signal-ready.
+
+If CI failed, diagnose and fix. This step loops up to 3 times.
+
+**For each attempt:**
+
+1. **Read the CI failure:**
+```bash
+source .pr-state/{{issue}}.env
+gh pr checks ${PR_NUMBER}
+# For detailed logs:
+gh run view <run-id> --log-failed
+```
+
+2. **Diagnose the root cause.** Common categories:
+   - Build failure → fix compilation/import errors
+   - Test failure → fix the test or the code it tests
+   - Lint failure → fix style issues
+   - Flaky test → retry once, then fix if consistent
+
+3. **Fix and push:**
+```bash
+# Fix the code
+git add <changed-files>
+git commit -m "fix: resolve CI failure — <description>"
+git push origin {{issue}}/implement
+```
+
+4. **Re-poll CI:**
+```bash
+gh pr checks ${PR_NUMBER} --watch --fail-fast
+```
+
+5. **Track attempt count.** If this is attempt 3 and CI still fails:
+```bash
+gt escalate -s MEDIUM "CI failing after 3 fix attempts on {{issue}}: <error summary>"
+```
+Do NOT continue looping. Escalate and wait.
+
+**Exit criteria:** CI passes, OR escalation sent after 3 failed attempts.
+"""
+
+# ==============================================================================
+# STEP 6: SIGNAL READY
+# ==============================================================================
+
+[[steps]]
+id = "signal-ready"
+title = "Signal merge readiness to witness/refinery"
+needs = ["fix-if-failed"]
+description = """
+CI is green. Signal that this PR is ready for auto-merge to the feature branch.
+
+**1. Verify clean state:**
+```bash
+source .pr-state/{{issue}}.env
+gh pr checks ${PR_NUMBER}  # Confirm all green
+git status                  # Confirm clean working tree
+```
+
+**2. Submit to merge queue:**
+```bash
+gt mq submit {{issue}}
+```
+
+Or if using Nura's merge=local workflow, the Refinery will pick up the
+MERGE_READY signal from the Witness automatically.
+
+**3. Update bead status:**
+```bash
+bd update {{issue}} --notes "PR #${PR_NUMBER} submitted, CI green, awaiting merge to {{target_branch}}"
+```
+
+**Exit criteria:** Merge request submitted. Bead updated with PR status.
+Polecat enters awaiting_verdict state for MERGED or FIX_NEEDED from Refinery.
+"""
+
+# ==============================================================================
+# VARIABLES
+# ==============================================================================
+
+[vars.issue]
+description = "Bead ID of the work item (e.g., nu-abc)"
+required = true
+
+[vars.target_branch]
+description = "Feature branch to target PRs against (e.g., feat/bayou-energy-migration)"
+required = true
+
+[vars.spec_path]
+description = "Path to the spec file for implementation context"
+required = false
+default = ""
+
+[vars.linear_ticket]
+description = "Linear ticket ID for status updates (e.g., NUR-42)"
+required = false
+default = ""

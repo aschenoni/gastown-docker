@@ -19,4 +19,23 @@ else
     /app/gastown/gt install /gt --git --force
 fi
 
+# Install custom formulas into the town workspace
+FORMULA_DIR="/gt/.beads/formulas"
+CUSTOM_DIR="/app/custom-formulas"
+if [ -d "$CUSTOM_DIR" ] && [ "$(ls -A "$CUSTOM_DIR" 2>/dev/null)" ]; then
+    mkdir -p "$FORMULA_DIR"
+    installed=0
+    for f in "$CUSTOM_DIR"/*.formula.toml; do
+        [ -f "$f" ] || continue
+        name="$(basename "$f")"
+        if [ ! -f "$FORMULA_DIR/$name" ] || ! cmp -s "$f" "$FORMULA_DIR/$name"; then
+            cp "$f" "$FORMULA_DIR/$name"
+            installed=$((installed + 1))
+        fi
+    done
+    if [ "$installed" -gt 0 ]; then
+        echo "Installed $installed custom formula(s) into $FORMULA_DIR"
+    fi
+fi
+
 exec "$@"
