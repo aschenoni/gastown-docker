@@ -1,0 +1,250 @@
+description = """
+Periodic dog that reviews brainstorm beads for staleness and relevance.
+
+Runs on the Deacon patrol cycle (weekly). For each brainstorm bead that
+is parked or awaiting research, checks:
+- Is it past its revisit-by date?
+- Has related work been done since (specs created, beads closed)?
+- Is the topic still relevant given recent project activity?
+
+Reports findings to the Mayor for triage. Does not take action on its own —
+the Mayor decides whether to resume, close, or extend brainstorm items.
+
+## Pipeline
+
+```
+[query-brainstorms]    Find all open brainstorm beads with outcome:parked or outcome:research
+       ↓
+[check-staleness]      For each: check revisit-by date, scan for related recent work
+       ↓
+[assess-relevance]     Cross-reference with recent project activity and closed beads
+       ↓
+[generate-report]      Produce a triage report grouped by urgency
+       ↓
+[notify]               Mail report to Mayor (only if there are items to triage)
+```
+"""
+formula = "mol-dog-brainstorm-review"
+type = "workflow"
+version = 1
+
+# ==============================================================================
+# STEP 1: QUERY BRAINSTORMS
+# ==============================================================================
+
+[[steps]]
+id = "query-brainstorms"
+title = "Find all open brainstorm beads needing review"
+description = """
+Query for brainstorm beads that might need attention.
+
+**1. Find parked brainstorms:**
+```bash
+bd list --all -l category:brainstorm,outcome:parked --format=json \
+  > /tmp/brainstorm-review-parked.json
+```
+
+**2. Find research-pending brainstorms:**
+```bash
+bd list --all -l category:brainstorm,outcome:research --format=json \
+  > /tmp/brainstorm-review-research.json
+```
+
+**3. Find brainstorms with no outcome (abandoned mid-session?):**
+```bash
+bd list --all -l category:brainstorm --status=open --format=json \
+  > /tmp/brainstorm-review-open.json
+```
+Filter out any that have an outcome label (parked, research, spec-draft, decision).
+The remainder are brainstorms that were started but never completed.
+
+**4. Count totals:**
+- Parked: N
+- Research-pending: N
+- Incomplete: N
+- Total needing review: N
+
+If total is 0, skip to notify step (nothing to report).
+
+**Exit criteria:** Brainstorm beads collected into temp files. Counts known.
+"""
+
+# ==============================================================================
+# STEP 2: CHECK STALENESS
+# ==============================================================================
+
+[[steps]]
+id = "check-staleness"
+title = "Check revisit-by dates and age"
+needs = ["query-brainstorms"]
+description = """
+For each brainstorm bead, determine if it's stale.
+
+**1. For each bead in the collected lists:**
+
+Read the bead:
+```bash
+bd show <bead-id>
+```
+
+Check labels for `revisit-by:<date>`. Compare against today's date.
+
+**Staleness categories:**
+- **Overdue**: revisit-by date has passed
+- **Due soon**: revisit-by date is within 7 days
+- **No date**: brainstorm has no revisit-by date (incomplete brainstorms)
+- **Fresh**: revisit-by date is more than 7 days out
+
+**2. For beads with no revisit-by date:**
+Check the bead's creation date or last update date.
+If older than 30 days with no outcome → flag as "abandoned."
+
+**3. Record staleness assessment:**
+Build a list:
+```
+<bead-id> | <title> | <outcome> | <revisit-by> | <status: overdue|due-soon|no-date|fresh>
+```
+
+**Exit criteria:** Every brainstorm bead has a staleness assessment.
+"""
+
+# ==============================================================================
+# STEP 3: ASSESS RELEVANCE
+# ==============================================================================
+
+[[steps]]
+id = "assess-relevance"
+title = "Cross-reference with recent project activity"
+needs = ["check-staleness"]
+description = """
+Check if the world has changed since each brainstorm was parked.
+
+**For each stale or due brainstorm bead:**
+
+**1. Check for related specs created since:**
+Read the bead's domain and codebase tags. Search for specs touching
+those areas created after the brainstorm date:
+```bash
+# Check for specs in the relevant areas
+find . -name "*.md" -path "*/specs*" -newer <brainstorm-date-ref>
+```
+
+**2. Check for related beads closed since:**
+```bash
+bd list --all --status=closed -l domain:<tag> --format=json
+```
+If related beads have been closed, the brainstorm topic may already
+be addressed.
+
+**3. Check for related PRs merged since:**
+```bash
+git log --since="<brainstorm-date>" --oneline --grep="<topic keywords>"
+```
+
+**4. Assess each brainstorm:**
+- **Superseded**: Related work has addressed this topic. Recommend close.
+- **Still relevant**: No related work found. Recommend resume or extend.
+- **Partially addressed**: Some related work, but not all. Note what's left.
+
+**Exit criteria:** Each stale brainstorm has a relevance assessment.
+"""
+
+# ==============================================================================
+# STEP 4: GENERATE REPORT
+# ==============================================================================
+
+[[steps]]
+id = "generate-report"
+title = "Produce triage report"
+needs = ["assess-relevance"]
+description = """
+Compile findings into a structured report for the Mayor.
+
+**Generate report at `/tmp/brainstorm-triage-report.md`:**
+
+```markdown
+# Brainstorm Triage Report
+
+**Generated:** <date>
+**Total brainstorms reviewed:** N
+
+## Overdue (action needed)
+
+| Bead | Topic | Parked Since | Revisit-By | Assessment |
+|------|-------|-------------|------------|------------|
+| <id> | <topic> | <date> | <date> | <superseded|relevant|partial> |
+
+### Recommendations
+- <bead-id>: <recommend close|resume|extend — with reasoning>
+
+## Due Soon (next 7 days)
+
+| Bead | Topic | Revisit-By | Assessment |
+|------|-------|------------|------------|
+| <id> | <topic> | <date> | <assessment> |
+
+## Abandoned (no outcome, >30 days old)
+
+| Bead | Topic | Created | Last Updated |
+|------|-------|---------|-------------|
+| <id> | <topic> | <date> | <date> |
+
+### Recommendations
+- <bead-id>: <recommend resume or close — with reasoning>
+
+## Summary
+- Overdue: N (N superseded, N still relevant)
+- Due soon: N
+- Abandoned: N
+- Fresh (no action needed): N
+```
+
+If all brainstorms are fresh (nothing to triage), generate a one-line
+report: "All N brainstorm items are within their review dates. No action needed."
+
+**Exit criteria:** Triage report generated.
+"""
+
+# ==============================================================================
+# STEP 5: NOTIFY
+# ==============================================================================
+
+[[steps]]
+id = "notify"
+title = "Mail report to Mayor"
+needs = ["generate-report"]
+description = """
+Send the triage report to the Mayor. Only send if there are items to triage.
+
+**If there are overdue, due-soon, or abandoned items:**
+```bash
+gt mail send mayor/ \
+  -s "Brainstorm triage: <N overdue, N due soon, N abandoned>" \
+  -m "$(cat /tmp/brainstorm-triage-report.md)"
+```
+
+**If everything is fresh:**
+Do NOT mail. Silence is healthy. Record a run wisp and return to kennel:
+```bash
+bd create "brainstorm-review: all fresh" -t chore --ephemeral \
+  -l type:plugin-run,plugin:brainstorm-review,result:success \
+  -d "Reviewed N brainstorm beads. All within review dates." \
+  --silent 2>/dev/null || true
+```
+
+**Clean up temp files:**
+```bash
+rm -f /tmp/brainstorm-review-*.json /tmp/brainstorm-triage-report.md
+```
+
+**Exit criteria:** Report mailed (if items to triage) or run wisp recorded
+(if all fresh). Temp files cleaned. Return to kennel.
+"""
+
+# ==============================================================================
+# SQUASH
+# ==============================================================================
+
+[squash]
+trigger = "on_complete"
+template_type = "work"

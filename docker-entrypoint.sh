@@ -38,4 +38,49 @@ if [ -d "$CUSTOM_DIR" ] && [ "$(ls -A "$CUSTOM_DIR" 2>/dev/null)" ]; then
     fi
 fi
 
+# Install custom plugins into the town workspace
+PLUGIN_DIR="/gt/plugins"
+CUSTOM_PLUGIN_DIR="/app/custom-plugins"
+if [ -d "$CUSTOM_PLUGIN_DIR" ] && [ "$(ls -A "$CUSTOM_PLUGIN_DIR" 2>/dev/null)" ]; then
+    installed_plugins=0
+    for plugin_src in "$CUSTOM_PLUGIN_DIR"/*/; do
+        [ -d "$plugin_src" ] || continue
+        plugin_name="$(basename "$plugin_src")"
+        plugin_dest="$PLUGIN_DIR/$plugin_name"
+        mkdir -p "$plugin_dest"
+        for f in "$plugin_src"*; do
+            [ -f "$f" ] || continue
+            fname="$(basename "$f")"
+            if [ ! -f "$plugin_dest/$fname" ] || ! cmp -s "$f" "$plugin_dest/$fname"; then
+                cp "$f" "$plugin_dest/$fname"
+                installed_plugins=$((installed_plugins + 1))
+            fi
+        done
+    done
+    if [ "$installed_plugins" -gt 0 ]; then
+        echo "Installed/updated $installed_plugins custom plugin file(s) into $PLUGIN_DIR"
+    fi
+fi
+
+# Start Dolt (needed for dashboard even if Claude isn't authenticated yet)
+echo "Starting Dolt..."
+/app/gastown/gt dolt start 2>&1 || true
+
+# Try to start full Gas Town services — may fail if Claude isn't authenticated
+echo "Starting Gas Town services..."
+/app/gastown/gt up 2>&1 || echo "Warning: gt up failed (run 'claude login' then 'gt up' to complete setup)"
+
+# Start dashboard on port 8080 (background)
+echo "Starting dashboard on :8080..."
+/app/gastown/gt dashboard --port 8080 --bind 0.0.0.0 &
+
+# Start ttyd terminal on port 7681 (background)
+echo "Starting terminal on :7681..."
+ttyd -p 7681 -W /app/ttyd-mayor.sh &
+
+echo "All services started."
+echo "  Dashboard: http://localhost:8080"
+echo "  Terminal:  http://localhost:7681"
+
+# Keep container alive and forward signals
 exec "$@"

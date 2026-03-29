@@ -1,0 +1,517 @@
+description = """
+Open-ended brainstorm and feasibility exploration formula.
+
+Designed for the upstream activity before spec writing: exploring ideas,
+checking feasibility against the codebase, sketching approaches, and
+capturing findings durably for later retrieval.
+
+Key design principles:
+- The "explore" step is intentionally open-ended — the human drives it
+- Each topic gets ONE brainstorm bead that evolves over sessions (no duplicates)
+- search-prior runs first to surface related prior work
+- Artifacts are flexible: spec draft, decision record, research brief, or parking lot
+- Beads are tagged for retrieval so findings surface when relevant
+
+## Pipeline
+
+```
+[search-prior]        Search for existing brainstorm beads, specs, decision records
+                      on the same topic. Present to human.
+                      → If continuing prior work: load that bead
+                      → If new topic: create brainstorm bead
+      ↓
+[frame]               Define what we're exploring, why, what areas of the codebase
+      ↓
+[explore]             Open-ended: research, discuss, sketch, assess feasibility
+                      Agent takes running notes. Human says when to wrap up.
+      ↓
+[synthesize]          Distill into structured findings, update the brainstorm bead
+      ↓
+[produce-artifact]    Write the appropriate output: spec draft, decision record,
+                      research brief, or parking lot entry
+      ↓
+[persist]             Tag the bead for retrieval, write memories if surprising,
+                      link to related beads/specs
+      ↓
+[human-close]         Present summary, confirm capture, optionally pour
+                      mol-spec-lifecycle if a spec is ready
+```
+
+## Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| topic | yes | What we're exploring (short phrase) |
+| context | no | Why now, related work, constraints |
+| rig | no | Target rig if we're exploring rig-specific code |
+"""
+formula = "mol-brainstorm"
+type = "workflow"
+version = 1
+pour = true
+
+# ==============================================================================
+# STEP 1: SEARCH PRIOR
+# ==============================================================================
+
+[[steps]]
+id = "search-prior"
+title = "Search for existing work on this topic"
+description = """
+Before exploring, check if we've been here before.
+
+**1. Search brainstorm beads:**
+```bash
+bd list --all -l category:brainstorm --format=json
+```
+
+Scan titles and descriptions for overlap with "{{topic}}". Also check:
+```bash
+bd list --all -l category:brainstorm | grep -i "<key terms from topic>"
+```
+
+**2. Search specs:**
+Look for existing spec files that relate to the topic:
+```bash
+find . -name "*.md" -path "*/specs*" | head -20
+find . -name "*.md" -path "*/docs*" | head -20
+```
+Read any that seem related to "{{topic}}".
+
+**3. Search decision records:**
+```bash
+bd list --all -l category:decision-record --format=json
+```
+
+**4. Search beads generally:**
+```bash
+bd list --all | grep -i "<key terms from topic>"
+```
+
+**5. Check gastown memories:**
+Read MEMORY.md for any related entries.
+
+**6. Present findings to human:**
+
+If related prior work found:
+```
+## Prior Work Found: {{topic}}
+
+### Related Brainstorms
+- <bead-id>: <title> (date, outcome: spec-draft|decision|research|parked)
+  Key finding: <one-line summary>
+
+### Related Specs
+- <path>: <title>
+
+### Related Decision Records
+- <bead-id>: <title> (date)
+
+---
+Options:
+1. **Continue** an existing brainstorm (I'll load its context and build on it)
+2. **Start fresh** (new brainstorm bead, but I'll link to the above)
+3. **This is already covered** — no need to brainstorm
+```
+
+If no related work found:
+```
+No prior work found on "{{topic}}". Starting a fresh brainstorm.
+```
+
+**7. Based on human's choice:**
+- If continuing: load the prior bead, read its notes and any linked artifacts.
+  Set `brainstorm_bead` to the existing bead ID.
+- If starting fresh: proceed to frame step (bead created there).
+- If already covered: exit the formula.
+
+**Exit criteria:** Prior work searched. Human has chosen to continue, start fresh,
+or exit. If continuing, prior bead context is loaded.
+"""
+
+# ==============================================================================
+# STEP 2: FRAME
+# ==============================================================================
+
+[[steps]]
+id = "frame"
+title = "Frame the exploration"
+needs = ["search-prior"]
+description = """
+Define the scope of what we're exploring. This step structures the brainstorm
+without constraining it.
+
+**If continuing a prior brainstorm:**
+Read the existing bead and present: "Last time, we concluded X. We had open
+questions Y and Z. Where do you want to pick up?"
+
+**If starting fresh:**
+
+**1. Discuss with the human:**
+Ask:
+- What's the core idea or problem?
+- Why are you thinking about this now? (urgency, opportunity, pain point)
+- What codebase areas might this touch?
+- What domain concepts are involved?
+- Are there any known constraints?
+- What would success look like?
+
+Let the human talk. Don't force structure too early.
+
+**2. Create the brainstorm bead (if new):**
+```bash
+bd create "Brainstorm: {{topic}}" --type=task --description="
+## Topic
+{{topic}}
+
+## Context
+{{context}}
+
+## Why Now
+<from conversation>
+
+## Codebase Areas
+<identified from conversation>
+
+## Domain Concepts
+<identified from conversation>
+
+## Sessions
+### Session 1 — <date>
+Status: In progress
+" \
+  -l category:brainstorm \
+  -l domain:<concept1> \
+  -l domain:<concept2> \
+  -l codebase:<area1>
+```
+
+Record the bead ID for later steps.
+
+**3. If a rig is specified, read the relevant codebase:**
+```bash
+# Explore the areas the topic might touch
+# Read key files, understand current state
+```
+
+**4. Create a scratch doc:**
+```bash
+mkdir -p .brainstorms/
+touch .brainstorms/{{topic | slugify}}-scratch.md
+```
+This is where running notes go during the explore step.
+
+**Exit criteria:** Topic is framed. Brainstorm bead exists (new or prior).
+Codebase areas identified. Scratch doc ready.
+"""
+
+# ==============================================================================
+# STEP 3: EXPLORE
+# ==============================================================================
+
+[[steps]]
+id = "explore"
+title = "Open-ended exploration"
+needs = ["frame"]
+description = """
+This is the open-ended part. There are no fixed sub-steps — follow the
+conversation where it goes. The agent's job is to be a useful thinking
+partner and to take notes.
+
+**Agent responsibilities during exploration:**
+
+1. **Research on request.** When the human asks "is X feasible?" or "how does
+   Y work?", read the codebase, check dependencies, estimate complexity.
+
+2. **Challenge assumptions.** If the human proposes something that conflicts
+   with what you see in the code, say so. "That approach would work, but
+   the current auth middleware doesn't support X — we'd need to change it."
+
+3. **Take running notes.** Append to the scratch doc as you go:
+   ```
+   .brainstorms/{{topic | slugify}}-scratch.md
+   ```
+   Note: key insights, feasibility verdicts, open questions, approach sketches,
+   human decisions, things that surprised you.
+
+4. **Sketch approaches when asked.** The human may ask "how would we do X?"
+   Provide concrete approaches with trade-offs, not just abstract options.
+
+5. **Don't push toward closure.** The human decides when to wrap up.
+   Don't say "shall we synthesize?" after 10 minutes. Let them think.
+
+6. **Cross-reference as you go.** If you discover a connection to an existing
+   spec, bead, or codebase pattern, mention it.
+
+**The human ends this step** by saying something like "let's wrap up",
+"I think we have enough", or "let's synthesize". When they do, proceed.
+
+**Exit criteria:** Human has indicated they're done exploring. Scratch doc
+contains running notes from the session.
+"""
+
+# ==============================================================================
+# STEP 4: SYNTHESIZE
+# ==============================================================================
+
+[[steps]]
+id = "synthesize"
+title = "Distill findings into structured output"
+needs = ["explore"]
+description = """
+Convert the messy scratch notes into structured findings.
+
+**1. Read the scratch doc:**
+```bash
+cat .brainstorms/{{topic | slugify}}-scratch.md
+```
+
+**2. Produce a synthesis at `.brainstorms/{{topic | slugify}}-synthesis.md`:**
+
+```markdown
+# Brainstorm Synthesis: {{topic}}
+
+**Date:** <today>
+**Session:** <session number if continuing>
+**Participants:** Human + agent
+
+## Executive Summary
+<2-3 sentences: what we explored and the key takeaway>
+
+## Key Insights
+1. <insight>: <evidence or reasoning>
+2. <insight>: <evidence or reasoning>
+
+## Feasibility Assessment
+| Approach | Feasibility | Effort | Risk | Notes |
+|----------|------------|--------|------|-------|
+| <approach A> | High/Med/Low | S/M/L | <risk> | <notes> |
+| <approach B> | High/Med/Low | S/M/L | <risk> | <notes> |
+
+## Open Questions
+- <question>: <why it matters, who might know>
+
+## Codebase Findings
+- <file/module>: <what we discovered about current state>
+
+## Connections to Existing Work
+- <bead/spec/decision>: <how it relates>
+
+## Recommended Next Step
+<one of: write a spec, make a decision, research further, park it>
+<reasoning for the recommendation>
+```
+
+**3. Present the synthesis to the human in conversation.**
+Ask if anything is missing or mischaracterized.
+
+**4. Apply corrections if needed.**
+
+**Exit criteria:** Synthesis document exists and human has confirmed it's accurate.
+"""
+
+# ==============================================================================
+# STEP 5: PRODUCE ARTIFACT
+# ==============================================================================
+
+[[steps]]
+id = "produce-artifact"
+title = "Produce the appropriate output artifact"
+needs = ["synthesize"]
+description = """
+Based on the synthesis recommendation and human's decision, produce the
+right type of artifact. Ask the human which one if not obvious.
+
+**Option A: Spec Draft**
+If the brainstorm converged on a clear feature/change that's ready to formalize:
+
+Write a spec file at the appropriate location (e.g., `docs/specs/<topic>.md`)
+with standard spec structure:
+- Problem statement (from brainstorm framing)
+- Proposed solution (from feasibility-assessed approaches)
+- Acceptance criteria (derived from exploration)
+- Open questions (carried forward)
+- Edge cases (from exploration discoveries)
+
+This becomes the input to `mol-spec-lifecycle`.
+
+**Option B: Decision Record**
+If we made a decision (including "don't do this"):
+
+Write to `.brainstorms/{{topic | slugify}}-decision.md`:
+```markdown
+# Decision: {{topic}}
+
+**Date:** <today>
+**Status:** Accepted | Rejected | Deferred
+**Deciders:** <who>
+
+## Context
+<why this decision was needed>
+
+## Decision
+<what was decided>
+
+## Consequences
+<what follows from this decision>
+
+## Alternatives Considered
+<what else we looked at and why we didn't choose it>
+```
+
+**Option C: Research Brief**
+If more investigation is needed before we can decide:
+
+Update the brainstorm bead notes with:
+- What we know so far
+- What we still need to find out
+- Who to talk to or what to test
+- Suggested revisit date
+
+Set `revisit-by` label on the bead.
+
+**Option D: Parking Lot**
+If interesting but not actionable now:
+
+Update the brainstorm bead with:
+- Why it's interesting
+- What would need to change to make it actionable
+- Suggested revisit date (default: 30 days)
+
+Set `outcome:parked` and `revisit-by:<date>` labels.
+
+**Exit criteria:** Artifact produced (file written or bead updated).
+Human has confirmed the artifact type is correct.
+"""
+
+# ==============================================================================
+# STEP 6: PERSIST
+# ==============================================================================
+
+[[steps]]
+id = "persist"
+title = "Tag for retrieval, write memories, link related work"
+needs = ["produce-artifact"]
+description = """
+Make sure the brainstorm findings are findable later.
+
+**1. Update the brainstorm bead with final state:**
+
+```bash
+bd update <brainstorm-bead-id> --notes "
+### Session <N> — <date>
+Outcome: <spec-draft|decision|research|parked>
+Artifact: <path to spec/decision file, or 'bead notes'>
+Summary: <one-line>
+"
+```
+
+**2. Apply tags for retrieval:**
+```bash
+bd label add <brainstorm-bead-id> outcome:<type>
+bd label add <brainstorm-bead-id> domain:<concept>    # for each domain concept
+bd label add <brainstorm-bead-id> codebase:<area>     # for each codebase area
+bd label add <brainstorm-bead-id> revisit-by:<date>   # if parked or research
+```
+
+**3. Link to related work:**
+If search-prior found related beads, specs, or decisions:
+```bash
+bd dep add <brainstorm-bead-id> <related-bead-id>    # or bd link if available
+```
+
+If this brainstorm produced a spec draft, link the brainstorm bead to it:
+```bash
+bd update <brainstorm-bead-id> --notes "Spec produced: <path>"
+```
+
+**4. Write memories (conservative):**
+Only if something genuinely surprising was discovered during exploration.
+Apply the 3-month test: "Would this be useful on a different project 3 months
+from now?"
+
+Examples of what TO persist:
+- "Bayou Energy API has a 30-second timeout requiring batches under 50 items"
+- "The billing module has no test coverage — any changes need tests first"
+
+Examples of what NOT to persist:
+- "We discussed the data pipeline" (obvious from the bead)
+- "React hooks work like X" (general knowledge)
+
+**5. If a spec was produced, optionally add to PRODUCT.md:**
+If the spec represents a planned feature, add it to the feature inventory
+with status "Planned" and link to the spec file.
+
+**Exit criteria:** Bead updated with session notes. Tags applied. Related work
+linked. Memories written only if warranted.
+"""
+
+# ==============================================================================
+# STEP 7: HUMAN CLOSE
+# ==============================================================================
+
+[[steps]]
+id = "human-close"
+title = "Present summary and optionally kick off execution"
+needs = ["persist"]
+description = """
+Final step. Present what was captured and offer next steps.
+
+**1. Present to the human:**
+
+```
+## Brainstorm Complete: {{topic}}
+
+### What was captured
+- **Bead:** <bead-id> (tagged: <tags>)
+- **Artifact:** <spec draft at X | decision record at X | research brief in bead | parked until X>
+- **Synthesis:** .brainstorms/{{topic | slugify}}-synthesis.md
+
+### Key takeaway
+<one-line summary of the most important finding>
+
+### Related work linked
+<list of related beads/specs that were connected>
+
+### Memories written
+<list, or "None — nothing surprising enough to persist">
+
+---
+What's next?
+1. **Execute** — pour mol-spec-lifecycle with the spec draft (if one was produced)
+2. **Share** — I can summarize this for your business partner
+3. **Nothing for now** — findings are captured and searchable
+```
+
+**2. If human chooses to execute:**
+```bash
+gt formula run mol-spec-lifecycle \
+  --spec_path="<spec path>" \
+  --spec_name="{{topic}}" \
+  --rig="<rig>"
+```
+
+**3. If human chooses to share:**
+Generate a brief summary suitable for sending to the business partner.
+
+**Exit criteria:** Human has acknowledged the capture. Next steps are clear.
+Formula complete.
+"""
+
+# ==============================================================================
+# VARIABLES
+# ==============================================================================
+
+[vars.topic]
+description = "What we're exploring (short phrase, e.g., 'Bayou Energy migration')"
+required = true
+
+[vars.context]
+description = "Why now, related work, constraints, background"
+required = false
+default = ""
+
+[vars.rig]
+description = "Target rig if exploring rig-specific code"
+required = false
+default = ""

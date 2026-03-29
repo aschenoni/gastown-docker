@@ -104,12 +104,14 @@ cmd_up() {
         echo "  Terminal:   http://terminal.${instance}.town"
     fi
     echo ""
-    echo "First time? Authenticate Claude and initialize:"
+    echo "Services (Dolt, Daemon, Deacon, Mayor, Dashboard, Terminal)"
+    echo "start automatically inside the container."
+    echo ""
+    echo "First time? Authenticate Claude:"
     echo "  gt-docker shell $instance"
     echo "  claude login"
-    echo "  gt up && gt mayor attach"
     echo ""
-    echo "Already initialized? Attach directly:"
+    echo "Attach to Mayor:"
     echo "  gt-docker mayor $instance"
 }
 
@@ -179,6 +181,29 @@ cmd_logs() {
     docker logs -f "$cname"
 }
 
+sync_to_instance() {
+    local cname="$1"
+    local inst="$2"
+
+    # Sync formulas
+    for f in "$SCRIPT_DIR/formulas"/*.formula.toml; do
+        [ -f "$f" ] || continue
+        docker cp "$f" "$cname:/gt/.beads/formulas/"
+    done
+
+    # Sync plugins (each plugin is a directory)
+    for plugin_dir in "$SCRIPT_DIR/plugins"/*/; do
+        [ -d "$plugin_dir" ] || continue
+        local plugin_name
+        plugin_name="$(basename "$plugin_dir")"
+        docker exec "$cname" mkdir -p "/gt/plugins/$plugin_name" 2>/dev/null || true
+        for f in "$plugin_dir"*; do
+            [ -f "$f" ] || continue
+            docker cp "$f" "$cname:/gt/plugins/$plugin_name/"
+        done
+    done
+}
+
 cmd_formulas() {
     local subcmd="${1:-list}"
     shift 2>/dev/null || true
@@ -195,6 +220,17 @@ cmd_formulas() {
                 desc=$(grep -m1 '^formula' "$f" 2>/dev/null | cut -d'"' -f2)
                 printf "  %-30s %s\n" "$name" "$desc"
             done
+            echo ""
+            echo "Custom plugins in $SCRIPT_DIR/plugins/:"
+            echo ""
+            for d in "$SCRIPT_DIR/plugins"/*/; do
+                [ -d "$d" ] || { echo "  (none)"; break; }
+                local pname
+                pname="$(basename "$d")"
+                local pdesc
+                pdesc=$(grep -m1 '^description' "$d/plugin.md" 2>/dev/null | cut -d'"' -f2)
+                printf "  %-30s %s\n" "$pname" "$pdesc"
+            done
             ;;
         sync)
             local instance="$1"
@@ -203,25 +239,28 @@ cmd_formulas() {
                 exit 1
             fi
             if [[ "$instance" == "--all" ]]; then
-                echo "Syncing formulas to all running instances..."
+                echo "Syncing formulas and plugins to all running instances..."
                 for cname in $(docker ps --filter "name=gastown-" --format "{{.Names}}"); do
                     local inst="${cname#gastown-}"
                     echo "  → $inst"
-                    for f in "$SCRIPT_DIR/formulas"/*.formula.toml; do
-                        [ -f "$f" ] || continue
-                        docker cp "$f" "$cname:/gt/.beads/formulas/"
-                    done
+                    sync_to_instance "$cname" "$inst"
                 done
                 echo "Done."
             else
                 local cname
                 cname="$(container_name "$instance")"
                 require_running "$instance"
-                echo "Syncing formulas to instance '$instance'..."
+                echo "Syncing formulas and plugins to instance '$instance'..."
+                sync_to_instance "$cname" "$instance"
+                echo "  Formulas:"
                 for f in "$SCRIPT_DIR/formulas"/*.formula.toml; do
                     [ -f "$f" ] || continue
-                    docker cp "$f" "$cname:/gt/.beads/formulas/"
-                    echo "  → $(basename "$f")"
+                    echo "    → $(basename "$f")"
+                done
+                echo "  Plugins:"
+                for d in "$SCRIPT_DIR/plugins"/*/; do
+                    [ -d "$d" ] || continue
+                    echo "    → $(basename "$d")/"
                 done
                 echo "Done."
             fi
@@ -238,13 +277,13 @@ cmd_formulas() {
             ;;
         *)
             cat <<'FEOF'
-gt-docker formulas — manage custom formulas
+gt-docker formulas — manage custom formulas and plugins
 
 Usage:
-  gt-docker formulas list                List custom formulas
+  gt-docker formulas list                List custom formulas and plugins
   gt-docker formulas add <file>          Add a formula to the collection
-  gt-docker formulas sync <instance>     Push formulas to a running instance
-  gt-docker formulas sync --all          Push formulas to all running instances
+  gt-docker formulas sync <instance>     Push formulas + plugins to a running instance
+  gt-docker formulas sync --all          Push to all running instances
 FEOF
             ;;
     esac
