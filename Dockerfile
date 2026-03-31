@@ -38,8 +38,8 @@ RUN curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/install.
 RUN mkdir -p /app /gt && chown agent:agent /app /gt
 
 # Environment setup for bash and zsh
-RUN echo 'export PATH="/app/gastown:$PATH"' >> /etc/profile.d/gastown.sh && \
-    echo 'export PATH="/app/gastown:$PATH"' >> /etc/zsh/zshenv
+RUN echo 'export PATH="/app/gastown:/home/agent/.local/bin:$PATH"' >> /etc/profile.d/gastown.sh && \
+    echo 'export PATH="/app/gastown:/home/agent/.local/bin:$PATH"' >> /etc/zsh/zshenv
 RUN echo 'export COLORTERM="truecolor"' >> /etc/profile.d/colorterm.sh && \
     echo 'export COLORTERM="truecolor"' >> /etc/zsh/zshenv
 RUN echo 'export TERM="xterm-256color"' >> /etc/profile.d/term.sh && \
