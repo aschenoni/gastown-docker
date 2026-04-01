@@ -1,0 +1,16 @@
+{
+  "_comment": "Plugins to explicitly disable for all Gas Town agent sessions. These are globally-enabled plugins that waste tokens on context injection irrelevant to Gas Town workloads. Each entry maps a plugin ID to false.",
+  "vercel@claude-plugins-official": false,
+  "frontend-design@claude-plugins-official": false,
+  "context7@claude-plugins-official": false,
+  "playwright@claude-plugins-official": false,
+  "typescript-lsp@claude-plugins-official": false,
+  "security-guidance@claude-plugins-official": false,
+  "supabase@claude-plugins-official": false,
+  "explanatory-output-style@claude-plugins-official": false,
+  "playground@claude-plugins-official": false,
+  "linear@claude-plugins-official": false,
+  "chrome-devtools-mcp@claude-plugins-official": false,
+  "notion@claude-plugins-official": false,
+  "sanity-plugin@claude-plugins-official": false
+}

@@ -1,8 +1,10 @@
 #!/bin/sh
-# Attach to the Mayor tmux session, or start one if it doesn't exist.
-# Used by ttyd to provide a browser-based Mayor terminal.
+# Attach to the Mayor tmux session, or fall back to a shell.
+# Used by ttyd to provide a browser-based terminal.
 if tmux has-session -t hq-mayor 2>/dev/null; then
     exec tmux attach-session -t hq-mayor
 else
-    exec /app/gastown/gt mayor attach
+    echo "Mayor session not running. Use 'gt up' to start services."
+    echo ""
+    exec zsh
 fi
