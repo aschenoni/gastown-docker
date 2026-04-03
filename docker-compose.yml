@@ -35,7 +35,7 @@ services:
     volumes:
       - town:/gt
       - home:/home/agent
-      - /run/host-services/ssh-auth.sock:/run/host-services/ssh-auth.sock
+      - ${SSH_AUTH_SOCK:-/run/host-services/ssh-auth.sock}:/run/host-services/ssh-auth.sock
     ports:
       - "${DASHBOARD_PORT:-0}:8080"
       - "${TERMINAL_PORT:-0}:7681"
