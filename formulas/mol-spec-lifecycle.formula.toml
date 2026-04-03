@@ -1,0 +1,812 @@
+description = """
+Full product lifecycle formula: from markdown spec to shipped, documented,
+and retrospected feature.
+
+Takes a markdown spec as input, expounds it to fill gaps and unknowns,
+reviews it from multiple angles, gets human approval, breaks it into beads,
+executes all work against a feature branch (with automated CI and refinery
+merge), runs integration verification, gets ONE human review on the complete
+feature branch → main PR, then runs full wrap-up (docs, Linear, presentation,
+learnings, retrospective).
+
+## Pipeline
+
+```
+[expound-spec]            Deepen the spec: unknowns, edge cases, acceptance criteria, test scenarios
+       ↓
+[spec-review]             6 polecats review expanded spec in parallel (convoy)
+       ↓
+[human-approve-spec]      HUMAN GATE: review expanded spec + review findings, approve direction
+       ↓
+[create-plan]             Break spec into sequenced beads with dependencies + eval beads
+       ↓
+[human-approve-plan]      HUMAN GATE: review plan, adjust scope/order/priority
+       ↓
+[setup-feature-branch]    Create feature branch from main
+       ↓
+[execute]                 Sling all beads targeting feature branch (refinery auto-merges)
+       ↓
+[await-execution]         Monitor convoy progress until all beads complete
+       ↓
+[integration-verify]      Run full test suite on feature branch, verify everything works
+       ↓
+[final-pr]                Open PR: feature branch → main
+       ↓
+[human-approve-merge]     HUMAN GATE: review feature branch PR, approve merge to main
+       ↓
+[merge-to-main]           Merge the approved PR to main
+       ↓
+[wrap-up]                 Pour mol-wrap-up (docs, Linear, presentation, learnings, retro)
+       ↓
+[human-final-review]      HUMAN GATE: review retro + presentation, sign off
+```
+
+## Human Gates (4)
+
+1. **After spec review**: Approve the expanded spec and direction before planning
+2. **After planning**: Approve the bead breakdown and execution order before coding starts
+3. **After integration-verify**: Approve the feature branch merge to main
+4. **After wrap-up**: Review retro and presentation, sign off on the completed work
+
+## Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| spec_path | yes | Path to the markdown spec file |
+| spec_name | yes | Human-readable name (e.g., "Bayou Energy Migration") |
+| rig | yes | Target rig for execution (e.g., "nura") |
+| linear_project | no | Linear project for ticket management |
+| context | no | Additional context: constraints, related code, prior decisions |
+
+## Design Principles
+
+- **Feature branch isolation**: All work merges to a feature branch first.
+  Human reviews the integrated result once, not N individual PRs.
+- **Spec as source of truth**: The spec file is annotated with implementation
+  notes post-completion, creating a permanent record.
+- **Evidence-based wrap-up**: Every downstream step (docs, retro, presentation)
+  draws from a collected manifest of real data, not LLM memory.
+- **Conservative learning capture**: Only novel, surprising, reusable insights
+  get persisted to memory. The 3-month test applies.
+"""
+formula = "mol-spec-lifecycle"
+type = "workflow"
+version = 1
+pour = true
+
+# ==============================================================================
+# STEP 1: EXPOUND SPEC
+# ==============================================================================
+
+[[steps]]
+id = "expound-spec"
+title = "Deepen the markdown spec with unknowns, edge cases, and acceptance criteria"
+description = """
+The input spec is a starting point — likely at the "idea" or "draft" level.
+This step expands it to implementation-ready depth.
+
+**1. Read the spec:**
+```bash
+cat {{spec_path}}
+```
+
+**2. Read the codebase areas the spec touches:**
+Identify which files, modules, and interfaces are affected. Read them.
+Understand the current state before proposing changes.
+
+**3. Expand the spec in-place. Add or deepen these sections:**
+
+- **Edge Cases**: What happens at boundaries? Empty inputs, concurrent access,
+  partial failures, rate limits, timeouts, large payloads, unicode, etc.
+- **Acceptance Criteria**: For every feature/change, add specific, testable
+  criteria. "User can X" is not enough — "When user does X with Y, system
+  responds with Z within N seconds" is.
+- **Test Scenarios**: For each acceptance criterion, describe how to verify it.
+  Include: unit test, integration test, or manual verification step.
+- **Error Handling**: What errors can occur? How should each be handled?
+  What does the user see? What gets logged?
+- **Migration / Rollback**: If this changes data models or integrations,
+  what's the migration path? How do we roll back if it fails?
+- **Dependencies & Prerequisites**: What must exist before this work starts?
+  External APIs, database tables, environment variables, feature flags.
+- **Open Questions**: Flag anything you can't determine from the spec and
+  codebase alone. These become questions for the human gate.
+- **Non-Goals**: Explicitly state what this spec does NOT cover, to prevent
+  scope creep during execution.
+
+**4. If the spec has {{context}}, incorporate it:**
+Additional constraints, related code references, or prior decisions should
+be woven into the relevant sections.
+
+**5. Commit the expanded spec:**
+```bash
+git add {{spec_path}}
+git commit -m "docs: expound {{spec_name}} spec with edge cases, acceptance criteria, test scenarios"
+```
+
+**Exit criteria:** Spec file has been meaningfully expanded. Every feature
+has acceptance criteria. Edge cases are documented. Open questions are flagged.
+Test scenarios exist for each acceptance criterion.
+"""
+
+# ==============================================================================
+# STEP 2: SPEC REVIEW (CONVOY)
+# ==============================================================================
+
+[[steps]]
+id = "spec-review"
+title = "Run parallel spec review (6 legs)"
+needs = ["expound-spec"]
+description = """
+Pour a convoy to review the expanded spec from 6 angles.
+
+**1. Pour the review convoy:**
+```bash
+gt formula run mol-prd-review \
+  --problem="{{spec_name}}" \
+  --context="Expanded spec at {{spec_path}}. {{context}}"
+```
+
+This spawns 6 polecats reviewing:
+- requirements completeness
+- gaps and missing requirements
+- ambiguity and contradictions
+- technical feasibility
+- scope and MVP definition
+- stakeholder analysis
+
+**2. Await synthesis:**
+```bash
+gt mail inbox
+```
+The convoy synthesis will mail back with a review report.
+
+**3. Read the review:**
+Read the synthesis output. Note critical questions and high-severity findings.
+These will be presented to the human in the next step.
+
+**Exit criteria:** Spec review convoy complete. Synthesis report received and read.
+"""
+
+# ==============================================================================
+# STEP 3: HUMAN APPROVE SPEC
+# ==============================================================================
+
+[[steps]]
+id = "human-approve-spec"
+title = "Human reviews expanded spec and review findings"
+needs = ["spec-review"]
+description = """
+This is a human gate. The molecule pauses here until the human approves.
+
+**1. Present to the human in conversation:**
+
+```
+## Spec Review Complete: {{spec_name}}
+
+### Spec Summary
+<3-5 bullet points of what the expanded spec covers>
+
+### Review Findings
+<top findings from the 6-dimensional review, ranked by severity>
+
+### Critical Questions
+<questions from the review that require human judgment>
+
+### Open Questions from Spec
+<open questions flagged during the expound step>
+
+---
+Please:
+1. Answer the critical questions
+2. Approve the spec direction, OR request modifications
+3. Flag anything the review missed
+```
+
+**2. Await reply in this conversation.**
+
+**3. If modifications requested:**
+- Apply changes to {{spec_path}}
+- Re-answer any critical questions in the spec
+- Commit changes
+
+**4. If approved:**
+- Note any answers/decisions in the spec's Open Questions section
+- Mark questions as resolved
+- Commit if any changes made
+
+**Exit criteria:** Human has approved the spec direction (possibly with modifications).
+All critical questions answered. Spec committed in approved state.
+"""
+
+# ==============================================================================
+# STEP 4: CREATE PLAN
+# ==============================================================================
+
+[[steps]]
+id = "create-plan"
+title = "Break spec into sequenced beads with dependencies"
+needs = ["human-approve-spec"]
+description = """
+Convert the approved spec into discrete work items (beads) with dependency
+ordering and eval beads for verification.
+
+**1. Read the approved spec:**
+```bash
+cat {{spec_path}}
+```
+
+**2. Identify discrete work items.**
+Each bead should be:
+- Independently implementable (one PR)
+- Clearly scoped (not "implement everything")
+- Testable (has acceptance criteria from the spec)
+- Estimated at roughly equal effort
+
+**3. Create beads:**
+For each work item:
+```bash
+bd create "<title>" --type=task --description="
+## Context
+Spec: {{spec_name}} ({{spec_path}})
+Linear: <ticket if exists>
+
+## What
+<specific implementation instructions>
+
+## Acceptance Criteria
+<from the spec's acceptance criteria section>
+
+## Files Likely Affected
+<list based on codebase analysis>
+
+## Test Approach
+<from the spec's test scenarios section>
+"
+```
+
+**4. Create eval beads for user-facing features:**
+For each bead that adds behavior a user or API consumer can observe:
+```bash
+bd create "Eval: <feature>" --type=task --description="
+Verify that <feature> works end-to-end.
+
+Criteria:
+- <specific test steps>
+- <expected outcomes>
+- Must use actual test framework (Playwright, Jest, etc.), not just code review
+"
+bd dep add <eval-bead> <impl-bead>
+```
+
+**5. Wire dependencies:**
+```bash
+bd dep add <task-x> <task-y>    # x depends on y
+```
+Order should reflect: data model changes first, then business logic, then
+UI/API, then tests, then eval beads.
+
+**6. Create a capstone eval bead:**
+One final eval that verifies the entire feature works end-to-end after all
+other beads are complete.
+
+**7. Create tracking epic:**
+```bash
+bd create "{{spec_name}}" --type=epic --description="
+Spec: {{spec_path}}
+Implementation of the {{spec_name}} feature.
+"
+```
+Add all beads as children of the epic.
+
+**8. Verify the graph:**
+```bash
+bd blocked    # should show clean topological order
+bd ready      # at least one task should be ready
+```
+
+**9. Create Linear tickets (if linear_project is set):**
+For each bead, create a corresponding Linear ticket and record the mapping.
+
+**Exit criteria:** All spec items have corresponding beads. Eval beads exist for
+user-facing features. Dependencies wired. Epic created. Graph is valid.
+"""
+
+# ==============================================================================
+# STEP 5: HUMAN APPROVE PLAN
+# ==============================================================================
+
+[[steps]]
+id = "human-approve-plan"
+title = "Human reviews the execution plan"
+needs = ["create-plan"]
+description = """
+This is a human gate. The molecule pauses here until the human approves.
+
+**1. Present to the human in conversation:**
+
+```
+## Execution Plan: {{spec_name}}
+
+### Beads Created
+<table: bead ID | title | dependencies | eval bead?>
+
+### Execution Order
+<the dependency-resolved sequence — what runs first, what's parallelizable>
+
+### Estimated Scope
+- Implementation beads: N
+- Eval beads: N
+- Total: N
+- Parallelizable batches: N (max concurrent polecats)
+
+### Questions
+- <any scope/priority questions for the human>
+
+---
+Please:
+1. Approve the plan, OR
+2. Request changes (reorder, add, remove, merge beads)
+3. Adjust priorities if needed
+```
+
+**2. Await reply in this conversation.**
+
+**3. If changes requested:**
+- Modify beads: `bd update <id>`, `bd dep add/rm`, `bd close <id>`
+- Create new beads if needed
+- Re-verify the graph: `bd blocked && bd ready`
+
+**Exit criteria:** Human has approved the execution plan. All beads are in
+their final state, ready for dispatch.
+"""
+
+# ==============================================================================
+# STEP 6: SETUP FEATURE BRANCH
+# ==============================================================================
+
+[[steps]]
+id = "setup-feature-branch"
+title = "Create feature branch from main"
+needs = ["human-approve-plan"]
+description = """
+Create an isolated feature branch for all spec work.
+
+**1. Ensure main is up to date:**
+```bash
+git checkout main
+git pull origin main
+```
+
+**2. Create the feature branch:**
+```bash
+BRANCH_NAME="feat/$(echo '{{spec_name}}' | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')"
+git checkout -b ${BRANCH_NAME}
+git push -u origin ${BRANCH_NAME}
+echo "feature_branch=${BRANCH_NAME}" >> .spec-state/{{spec_name | slugify}}.env
+```
+
+**3. Record the branch name** for downstream steps.
+
+**Exit criteria:** Feature branch exists on origin. Branch name recorded.
+"""
+
+# ==============================================================================
+# STEP 7: EXECUTE
+# ==============================================================================
+
+[[steps]]
+id = "execute"
+title = "Dispatch all beads targeting the feature branch"
+needs = ["setup-feature-branch"]
+description = """
+Sling all implementation beads to the target rig. Polecats will open PRs
+against the feature branch. Refinery auto-merges (no human review per PR).
+
+**1. Load the feature branch name:**
+```bash
+source .spec-state/{{spec_name | slugify}}.env
+```
+
+**2. Get ready beads:**
+```bash
+bd ready    # shows unblocked beads
+```
+
+**3. Create a convoy to track all beads:**
+```bash
+gt convoy create "{{spec_name}}" <bead-ids...> --merge=local --owned
+```
+
+**4. Dispatch beads:**
+```bash
+gt sling <bead-ids...> {{rig}} --merge=local
+```
+
+The sling will dispatch polecats. Each polecat uses `mol-pr-lifecycle`:
+- Implements code on a working branch
+- Opens PR targeting `${feature_branch}`
+- Waits for CI to pass (self-heals on failure)
+- Signals ready for refinery merge
+
+The refinery auto-merges green PRs to the feature branch without human review.
+
+**5. If scheduler is configured (max_polecats > 0):**
+Beads dispatch in capacity-controlled batches. The daemon handles scheduling.
+
+**Exit criteria:** All beads dispatched. Convoy created and tracking progress.
+"""
+
+# ==============================================================================
+# STEP 8: AWAIT EXECUTION
+# ==============================================================================
+
+[[steps]]
+id = "await-execution"
+title = "Monitor convoy until all beads complete"
+needs = ["execute"]
+description = """
+Wait for all beads to complete execution.
+
+**1. Monitor convoy status:**
+```bash
+gt convoy status <convoy-id>
+```
+
+Check periodically. The convoy auto-closes when all tracked beads complete.
+
+**2. Watch for escalations:**
+```bash
+gt mail inbox
+```
+If any polecat escalates (CI failures after 3 attempts, stuck work),
+handle the escalation:
+- Read the failure details
+- Determine if it's a code issue (fix and re-sling) or an infrastructure issue
+- If infrastructure: escalate to human
+- If code: fix on the feature branch directly or re-sling the bead
+
+**3. As eval beads complete, verify their results:**
+Eval beads should produce evidence (test output, screenshots, logs).
+Check that eval beads actually passed, not just "completed."
+
+**Exit criteria:** Convoy is complete (all beads closed). All eval beads passed
+with evidence. No unresolved escalations.
+"""
+
+# ==============================================================================
+# STEP 9: INTEGRATION VERIFY
+# ==============================================================================
+
+[[steps]]
+id = "integration-verify"
+title = "Run full test suite on the feature branch"
+needs = ["await-execution"]
+description = """
+Verify that all the merged PRs work together correctly on the feature branch.
+
+**1. Check out the feature branch:**
+```bash
+source .spec-state/{{spec_name | slugify}}.env
+git checkout ${feature_branch}
+git pull origin ${feature_branch}
+```
+
+**2. Run full gate suite:**
+```bash
+npm install         # fresh install to catch dependency issues
+npm run build       # full build
+npm run lint        # lint check
+npm run typecheck   # type check (if available)
+npm run test        # all unit tests
+npx playwright test # e2e tests (if available)
+```
+
+**3. If any gate fails:**
+- Diagnose the integration issue (likely a conflict between PRs)
+- Fix on the feature branch directly
+- Commit: `fix: resolve integration issue between <PR-A> and <PR-B>`
+- Re-run all gates
+
+**4. Verify against acceptance criteria:**
+Go through the spec's acceptance criteria section. For each criterion,
+confirm it's met by the test results or by manual verification.
+
+**5. Run the capstone eval (if it hasn't run already):**
+The capstone eval bead should verify the entire feature end-to-end.
+If it hasn't been dispatched yet, run it now.
+
+**Exit criteria:** All gates pass on the feature branch. All acceptance criteria
+verified. Feature is ready for human review.
+"""
+
+# ==============================================================================
+# STEP 10: FINAL PR
+# ==============================================================================
+
+[[steps]]
+id = "final-pr"
+title = "Open PR from feature branch to main"
+needs = ["integration-verify"]
+description = """
+Create the final PR for human review: feature branch → main.
+
+**1. Load state:**
+```bash
+source .spec-state/{{spec_name | slugify}}.env
+```
+
+**2. Open the PR:**
+```bash
+gh pr create \
+  --base main \
+  --head ${feature_branch} \
+  --title "feat: {{spec_name}}" \
+  --body "$(cat <<'PRBODY'
+## {{spec_name}}
+
+**Spec:** {{spec_path}}
+**Convoy:** <convoy-id>
+
+### Summary
+<3-5 bullet points: what this feature does>
+
+### Changes Included
+<list of all PRs merged to this feature branch, with one-line descriptions>
+
+### Acceptance Criteria
+<paste from spec, all should be checked off>
+
+### Test Coverage
+- Unit tests: <count>
+- Integration tests: <count>
+- E2E tests: <count>
+- All passing on feature branch
+
+### How to Review
+1. Scan the PR list above for scope understanding
+2. Run the app locally and test <key user flows>
+3. Check <specific areas of concern>
+
+### Follow-Up Items
+<deferred items, if any, with bead links>
+PRBODY
+)"
+```
+
+**3. Record the PR number:**
+```bash
+FINAL_PR=$(gh pr view --json number -q .number)
+echo "final_pr=${FINAL_PR}" >> .spec-state/{{spec_name | slugify}}.env
+```
+
+**Exit criteria:** Feature branch → main PR is open with comprehensive description.
+"""
+
+# ==============================================================================
+# STEP 11: HUMAN APPROVE MERGE
+# ==============================================================================
+
+[[steps]]
+id = "human-approve-merge"
+title = "Human reviews the feature branch and approves merge to main"
+needs = ["final-pr"]
+description = """
+This is a human gate. The molecule pauses here until the human approves.
+
+**1. Present to the human in conversation:**
+
+```
+## Feature Branch Ready for Review: {{spec_name}}
+
+**PR:** <link to PR>
+**Branch:** <feature_branch> → main
+
+### What's Included
+<summary of all changes, grouped by functional area>
+
+### Test Results
+- All gates passing on feature branch
+- <N> acceptance criteria verified
+- Capstone eval: <pass/fail>
+
+### Key Decisions Made During Implementation
+<from the execution phase — anything the human should know about>
+
+---
+Please review the PR on GitHub and:
+1. Approve when ready, OR
+2. Request changes (I'll fix on the feature branch and re-push)
+```
+
+**2. Monitor for PR approval:**
+Poll periodically:
+```bash
+source .spec-state/{{spec_name | slugify}}.env
+gh pr view ${FINAL_PR} --json reviewDecision,reviews
+```
+
+**3. If changes requested:**
+- Read the review comments
+- Fix on the feature branch
+- Push and re-run CI
+- Notify human that changes are addressed
+- Loop back to monitoring
+
+**4. If no review after 24 hours:**
+Nudge the human:
+```bash
+gt nudge <human> "PR #${FINAL_PR} for {{spec_name}} is awaiting your review"
+```
+
+**5. If no review after 48 hours:**
+Escalate:
+```bash
+gt escalate -s MEDIUM "Feature branch PR for {{spec_name}} awaiting review for 48h"
+```
+
+**Exit criteria:** Human has approved the PR on GitHub.
+"""
+
+# ==============================================================================
+# STEP 12: MERGE TO MAIN
+# ==============================================================================
+
+[[steps]]
+id = "merge-to-main"
+title = "Merge the approved feature branch to main"
+needs = ["human-approve-merge"]
+description = """
+The human has approved. Merge the feature branch.
+
+**1. Merge the PR:**
+```bash
+source .spec-state/{{spec_name | slugify}}.env
+gh pr merge ${FINAL_PR} --merge --delete-branch
+```
+
+Use `--merge` (not squash) to preserve individual PR history on main.
+Use `--delete-branch` to clean up the feature branch.
+
+**2. Verify the merge:**
+```bash
+git checkout main
+git pull origin main
+# Verify the merge commit exists
+git log --oneline -5
+```
+
+**3. Run post-merge smoke test:**
+```bash
+npm run build
+npm run test
+```
+
+**Exit criteria:** Feature branch merged to main. Main builds and tests pass.
+Feature branch deleted.
+"""
+
+# ==============================================================================
+# STEP 13: WRAP UP
+# ==============================================================================
+
+[[steps]]
+id = "wrap-up"
+title = "Run full wrap-up: docs, Linear, presentation, learnings, retro"
+needs = ["merge-to-main"]
+description = """
+Pour the mol-wrap-up formula to handle all post-completion work.
+
+**1. Pour the wrap-up formula:**
+```bash
+gt formula run mol-wrap-up \
+  --spec_path="{{spec_path}}" \
+  --spec_name="{{spec_name}}" \
+  --feature_branch="<feature_branch from state>" \
+  --convoy_id="<convoy-id>" \
+  --linear_project="{{linear_project}}" \
+  --epic_id="<epic-id>"
+```
+
+**2. Await completion:**
+The wrap-up formula runs through:
+- Gather evidence (PRs, comments, beads, diffs)
+- Verify completeness
+- Plan vs. reality diff
+- Update docs (PRODUCT.md, API docs, README)
+- Annotate spec with implementation notes
+- Close Linear tickets with completion comments
+- Generate HTML presentation for founders
+- Mine learnings from PR feedback and surprises
+- Internalize to gastown memory (conservative filter)
+- Write retrospective
+
+**3. Check mail for completion:**
+```bash
+gt mail inbox
+```
+
+**Exit criteria:** Wrap-up formula complete. All artifacts generated.
+"""
+
+# ==============================================================================
+# STEP 14: HUMAN FINAL REVIEW
+# ==============================================================================
+
+[[steps]]
+id = "human-final-review"
+title = "Human reviews retrospective and presentation"
+needs = ["wrap-up"]
+description = """
+This is the final human gate. Present the completed work for sign-off.
+
+**1. Present to the human in conversation:**
+
+```
+## {{spec_name}} — Complete
+
+### Artifacts
+- Presentation: .wrap-up/<slug>/presentation.html
+- Retrospective: .wrap-up/<slug>/retrospective.md
+- Plan vs. Reality: .wrap-up/<slug>/plan-vs-reality.md
+- Learnings: .wrap-up/<slug>/learnings.md
+
+### Quick Summary
+<3 bullet points: what shipped, what was deferred, key metrics>
+
+### Retrospective Highlights
+<top 3 "what went well" and top 3 "what didn't go well">
+
+### Learnings Internalized
+<list of memories written to gastown, if any>
+
+### Follow-Up Items
+<deferred beads created, with IDs>
+
+---
+Please:
+1. Review the presentation (open presentation.html in browser)
+2. Read the retrospective
+3. Flag any corrections or additions
+4. Sign off when satisfied
+```
+
+**2. Await reply in this conversation.**
+
+**3. If corrections requested:**
+- Update the relevant files
+- Re-commit
+
+**4. On sign-off:**
+- Close the epic bead
+- Close the convoy (if still open)
+- Mark the spec as complete in PRODUCT.md
+
+**Exit criteria:** Human has signed off. Epic closed. Spec lifecycle complete.
+"""
+
+# ==============================================================================
+# VARIABLES
+# ==============================================================================
+
+[vars.spec_path]
+description = "Path to the markdown spec file"
+required = true
+
+[vars.spec_name]
+description = "Human-readable name (e.g., 'Bayou Energy Migration')"
+required = true
+
+[vars.rig]
+description = "Target rig for execution (e.g., 'nura')"
+required = true
+
+[vars.linear_project]
+description = "Linear project for ticket management"
+required = false
+default = ""
+
+[vars.context]
+description = "Additional context: constraints, related code, prior decisions"
+required = false
+default = ""

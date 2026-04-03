@@ -7,5 +7,7 @@ if [ -S /run/host-services/ssh-auth.sock ]; then
     chmod 666 /run/host-services/ssh-auth.sock
 fi
 
-# Drop to agent user and run the real entrypoint with all arguments
-exec su -s /bin/sh agent -- /app/docker-entrypoint.sh "$@"
+# Drop to agent user with a full login environment.
+# Using su -l ensures HOME, USER, UID are all set correctly so that
+# gt, tmux, and dolt all use /tmp/tmux-1000/ (agent's UID) consistently.
+exec su -l agent -s /bin/sh -c "cd /gt && /app/docker-entrypoint.sh $*"

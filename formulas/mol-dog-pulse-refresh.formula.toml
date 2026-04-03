@@ -1,0 +1,317 @@
+description = """
+Weekly dog that refreshes structured data for the project pulse assessment.
+
+Keeps the quantitative side of the assessment warm between human pulse sessions.
+Does NOT make strategic recommendations or update business assessment — those
+require human judgment. Only refreshes data that can be measured objectively.
+
+Updates: bead counts, git activity, Linear state, CI health, metric staleness,
+spec completion, brainstorm item status.
+
+## Pipeline
+
+```
+[collect-rig-health]     Per-rig: git activity, build status, test status
+       ↓
+[collect-bead-state]     Town-wide: open/closed/blocked counts, convoy status
+       ↓
+[collect-linear-state]   Ticket counts, velocity, stale items
+       ↓
+[check-metric-staleness] For each tracked metric: is data current?
+       ↓
+[detect-changes]         Compare to last refresh, flag significant changes
+       ↓
+[update-data-file]       Write mayor/pulse/data-refresh.md
+       ↓
+[notify-if-significant]  Mail Mayor only if something notable changed
+```
+"""
+formula = "mol-dog-pulse-refresh"
+type = "workflow"
+version = 1
+
+# ==============================================================================
+# STEP 1: COLLECT RIG HEALTH
+# ==============================================================================
+
+[[steps]]
+id = "collect-rig-health"
+title = "Collect per-rig health indicators"
+description = """
+Quick health check across all rigs. Fast and non-invasive.
+
+**1. Read rig list:**
+```bash
+cat rigs.json
+```
+
+**2. For each rig, collect:**
+
+```bash
+# Commit activity (last 7 days)
+git -C <rig>/crew/aj log --oneline --since="7 days ago" 2>/dev/null | wc -l
+
+# Last commit date
+git -C <rig>/crew/aj log -1 --format="%ci" 2>/dev/null
+
+# Uncommitted changes (dirty state = potential issue)
+git -C <rig>/crew/aj status --porcelain 2>/dev/null | wc -l
+
+# Active branches (high count may indicate cleanup needed)
+git -C <rig>/crew/aj branch 2>/dev/null | wc -l
+```
+
+**3. Record per-rig summary:**
+```
+<rig>: <N commits/7d>, last commit <date>, <clean|dirty>, <N branches>
+```
+
+**Exit criteria:** Health data collected for each rig.
+"""
+
+# ==============================================================================
+# STEP 2: COLLECT BEAD STATE
+# ==============================================================================
+
+[[steps]]
+id = "collect-bead-state"
+title = "Collect town-wide bead statistics"
+needs = ["collect-rig-health"]
+description = """
+Snapshot the bead system state.
+
+```bash
+# Open beads by type
+bd list --all --status=open --format=json > /tmp/pulse-refresh-open.json
+
+# Count by type
+echo "Tasks: $(bd list --all --status=open --type=task 2>/dev/null | wc -l)"
+echo "Epics: $(bd list --all --status=open --type=epic 2>/dev/null | wc -l)"
+echo "Brainstorms: $(bd list --all -l category:brainstorm --status=open 2>/dev/null | wc -l)"
+
+# Closed in last 7 days
+bd list --all --status=closed --created-after=-7d 2>/dev/null | wc -l
+
+# Blocked
+bd blocked 2>/dev/null | wc -l
+
+# Convoy status
+gt convoy list 2>/dev/null
+
+# Pulse action items still open
+bd list --all -l category:pulse-action --status=open 2>/dev/null
+```
+
+**Exit criteria:** Bead state snapshot collected.
+"""
+
+# ==============================================================================
+# STEP 3: COLLECT LINEAR STATE
+# ==============================================================================
+
+[[steps]]
+id = "collect-linear-state"
+title = "Collect Linear ticket state"
+needs = ["collect-rig-health"]
+description = """
+Query Linear for project health indicators.
+
+Using Linear MCP tools (if available):
+
+```
+mcp__plugin_linear_linear__list_issues:
+  - Filter: project in scope, not archived
+  - Group by: status (Backlog, Todo, In Progress, In Review, Done)
+```
+
+Collect:
+- Total open tickets
+- Tickets not updated in >14 days (stale)
+- Tickets with no assignee
+- Tickets completed this week vs last week (velocity trend)
+- Tickets created this week (intake rate)
+
+If Linear MCP is not available, note that and skip.
+
+**Exit criteria:** Linear state collected (or noted as unavailable).
+"""
+
+# ==============================================================================
+# STEP 4: CHECK METRIC STALENESS
+# ==============================================================================
+
+[[steps]]
+id = "check-metric-staleness"
+title = "Check tracked metrics for staleness"
+needs = ["collect-rig-health"]
+description = """
+If metrics are defined in the living assessment, check each one.
+
+**1. Read current metrics:**
+```bash
+cat mayor/pulse/assessment.md  # look for Metrics section
+cat mayor/pulse/metrics.md 2>/dev/null
+```
+
+**2. For each tracked metric:**
+- When was the value last updated?
+- Is the data source still accessible?
+- Has the metric drifted from its target?
+
+**3. Flag:**
+- Metrics not updated in >30 days
+- Metrics with no defined source
+- Metrics significantly above/below target
+
+If no metrics are defined yet, note: "No formal metrics tracked. This was
+flagged in the last pulse."
+
+**Exit criteria:** Metric staleness checked. Stale metrics flagged.
+"""
+
+# ==============================================================================
+# STEP 5: DETECT CHANGES
+# ==============================================================================
+
+[[steps]]
+id = "detect-changes"
+title = "Compare to last refresh and flag significant changes"
+needs = ["collect-bead-state", "collect-linear-state", "check-metric-staleness"]
+description = """
+Compare current data to the previous refresh to spot trends and anomalies.
+
+**1. Read previous refresh:**
+```bash
+cat mayor/pulse/data-refresh.md 2>/dev/null
+```
+
+**2. Compare and flag:**
+
+Significant changes (worth notifying Mayor):
+- Open bead count changed by >20%
+- A rig went from active to dormant (no commits in 7 days)
+- A rig went from clean to dirty (uncommitted changes)
+- Linear velocity dropped by >50%
+- A tracked metric went stale
+- All pulse action items completed (good news!)
+- A previously blocked item became unblocked
+- An escalation was filed
+
+Not significant (just record):
+- Normal fluctuation in bead/ticket counts
+- Routine commit activity
+- Stable metrics
+
+**3. Compose change summary:**
+```
+Changes since last refresh (<date>):
+- [NOTABLE] <change description>
+- [NOTABLE] <change description>
+- [routine] <change description>
+```
+
+**Exit criteria:** Changes detected and categorized as notable or routine.
+"""
+
+# ==============================================================================
+# STEP 6: UPDATE DATA FILE
+# ==============================================================================
+
+[[steps]]
+id = "update-data-file"
+title = "Write refreshed data to pulse directory"
+needs = ["detect-changes"]
+description = """
+Write the collected data to the pulse directory.
+
+**Write `mayor/pulse/data-refresh.md`:**
+
+```markdown
+# Pulse Data Refresh
+
+**Date:** <today>
+**Previous refresh:** <date>
+
+## Rig Health
+| Rig | Commits/7d | Last Commit | State | Branches |
+|-----|-----------|-------------|-------|----------|
+| <rig> | N | <date> | clean/dirty | N |
+
+## Bead State
+| Type | Open | Closed (7d) | Blocked |
+|------|------|-------------|---------|
+| Tasks | N | N | N |
+| Epics | N | N | N |
+| Brainstorms | N | - | - |
+
+Active convoys: N
+Pulse action items open: N
+
+## Linear State
+| Status | Count | Stale (>14d) |
+|--------|-------|-------------|
+| Backlog | N | N |
+| Todo | N | N |
+| In Progress | N | N |
+| Done (7d) | N | - |
+
+Velocity trend: <up/down/stable>
+
+## Metrics Health
+| Metric | Status | Last Updated |
+|--------|--------|-------------|
+| <metric> | current/stale/broken | <date> |
+
+## Changes Since Last Refresh
+<change summary from detect-changes>
+```
+
+**Exit criteria:** data-refresh.md written with current data.
+"""
+
+# ==============================================================================
+# STEP 7: NOTIFY IF SIGNIFICANT
+# ==============================================================================
+
+[[steps]]
+id = "notify-if-significant"
+title = "Mail Mayor only if notable changes detected"
+needs = ["update-data-file"]
+description = """
+Only disturb the Mayor if something notable happened.
+
+**If notable changes exist:**
+```bash
+gt mail send mayor/ \
+  -s "Pulse refresh: <N notable change(s)>" \
+  -m "<change summary — only the NOTABLE items>"
+```
+
+Keep the mail short — just the notable changes and a pointer to the data file.
+The full data is in `mayor/pulse/data-refresh.md`.
+
+**If no notable changes:**
+Record a silent run wisp and return to kennel:
+```bash
+bd create "pulse-refresh: all stable" -t chore --ephemeral \
+  -l type:plugin-run,plugin:pulse-refresh,result:success \
+  -d "Pulse data refreshed. No notable changes." \
+  --silent 2>/dev/null || true
+```
+
+**Clean up temp files:**
+```bash
+rm -f /tmp/pulse-refresh-*.json
+```
+
+**Exit criteria:** Mayor notified (if notable) or run wisp recorded (if stable).
+Return to kennel.
+"""
+
+# ==============================================================================
+# SQUASH
+# ==============================================================================
+
+[squash]
+trigger = "on_complete"
+template_type = "work"

@@ -38,8 +38,8 @@ RUN curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/install.
 RUN mkdir -p /app /gt && chown agent:agent /app /gt
 
 # Environment setup for bash and zsh
-RUN echo 'export PATH="/app/gastown:$PATH"' >> /etc/profile.d/gastown.sh && \
-    echo 'export PATH="/app/gastown:$PATH"' >> /etc/zsh/zshenv
+RUN echo 'export PATH="/app/gastown:/home/agent/.local/bin:$PATH"' >> /etc/profile.d/gastown.sh && \
+    echo 'export PATH="/app/gastown:/home/agent/.local/bin:$PATH"' >> /etc/zsh/zshenv
 RUN echo 'export COLORTERM="truecolor"' >> /etc/profile.d/colorterm.sh && \
     echo 'export COLORTERM="truecolor"' >> /etc/zsh/zshenv
 RUN echo 'export TERM="xterm-256color"' >> /etc/profile.d/term.sh && \
@@ -63,6 +63,10 @@ RUN git clone --depth 1 --branch ${GASTOWN_REF} ${GASTOWN_REPO} /app/gastown && 
 COPY --chown=agent:agent docker-entrypoint.sh /app/docker-entrypoint.sh
 COPY --chown=agent:agent ttyd-mayor.sh /app/ttyd-mayor.sh
 RUN chmod +x /app/docker-entrypoint.sh /app/ttyd-mayor.sh
+
+# Custom formulas and plugins — installed into town workspace by entrypoint
+COPY --chown=agent:agent formulas/ /app/custom-formulas/
+COPY --chown=agent:agent plugins/ /app/custom-plugins/
 
 WORKDIR /gt
 

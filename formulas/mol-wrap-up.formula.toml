@@ -1,0 +1,639 @@
+description = """
+Post-completion wrap-up formula for a spec feature.
+
+After all PRs are merged and integration-verified, this formula handles:
+documentation updates, Linear ticket closure, spec annotation with
+implementation notes, presentation generation, learning capture,
+memory internalization, and retrospective writing.
+
+## Pipeline
+
+```
+[gather-evidence]       Collect all PRs, diffs, comments, spec, beads into manifest
+      ↓
+[verify-complete]       Confirm all beads closed, all PRs merged
+      ↓
+[plan-vs-reality]       Diff original plan against what shipped
+      ↓
+[update-docs]           Update PRODUCT.md, API docs, README per manifest
+      ↓
+[annotate-spec]         Add "Implementation Notes" section to original spec
+      ↓
+[close-linear]          Mark all Linear tickets Done with completion comments
+      ↓
+[generate-presentation] Create timestamped HTML presentation for founders
+      ↓
+[mine-learnings]        Extract lessons from PR comments, CI failures, surprises
+      ↓
+[internalize]           Write to gastown memory + CLAUDE.md (conservative filter)
+      ↓
+[write-retro]           Generate retrospective document
+```
+
+## Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| spec_path | yes | Path to the original spec file |
+| spec_name | yes | Human-readable name for the spec (e.g., "Bayou Energy Migration") |
+| feature_branch | yes | The feature branch that was merged |
+| convoy_id | no | Convoy ID for tracking bead completion |
+| linear_project | no | Linear project for ticket queries |
+| epic_id | no | Epic bead ID for the parent tracking bead |
+"""
+formula = "mol-wrap-up"
+type = "workflow"
+version = 1
+
+# ==============================================================================
+# STEP 1: GATHER EVIDENCE
+# ==============================================================================
+
+[[steps]]
+id = "gather-evidence"
+title = "Collect all evidence into a manifest"
+description = """
+Build a complete manifest of everything that happened during this spec's execution.
+This manifest scopes all downstream steps — nothing should reference raw sources
+after this step.
+
+**1. Create manifest directory:**
+```bash
+mkdir -p .wrap-up/{{spec_name | slugify}}/
+```
+
+**2. Collect merged PRs:**
+```bash
+# List all PRs that targeted the feature branch
+gh pr list --base {{feature_branch}} --state merged --json number,title,url,mergedAt,body,comments,reviews \
+  > .wrap-up/{{spec_name | slugify}}/prs.json
+```
+
+**3. Collect PR comments and review feedback:**
+For each PR in prs.json:
+```bash
+gh pr view <number> --json comments,reviews,reviewRequests \
+  >> .wrap-up/{{spec_name | slugify}}/pr-feedback.json
+```
+
+Extract all human-authored comments (filter out bot/CI comments).
+
+**4. Collect bead status:**
+```bash
+bd list --epic={{epic_id}} --format=json > .wrap-up/{{spec_name | slugify}}/beads.json
+```
+
+**5. Collect the original spec:**
+```bash
+cp {{spec_path}} .wrap-up/{{spec_name | slugify}}/original-spec.md
+```
+
+**6. Collect the implementation plan:**
+If a design doc exists (from mol-idea-to-plan), copy it:
+```bash
+cp .designs/*/design-doc.md .wrap-up/{{spec_name | slugify}}/plan.md 2>/dev/null || true
+```
+
+**7. Generate a diff summary:**
+```bash
+git log main..{{feature_branch}} --oneline > .wrap-up/{{spec_name | slugify}}/commit-log.txt
+git diff main...{{feature_branch}} --stat > .wrap-up/{{spec_name | slugify}}/diff-stat.txt
+```
+
+**8. Write manifest index:**
+Create `.wrap-up/{{spec_name | slugify}}/manifest.md` listing all collected files
+and their purpose.
+
+**Exit criteria:** Manifest directory exists with prs.json, pr-feedback.json,
+beads.json, original-spec.md, commit-log.txt, diff-stat.txt, and manifest.md.
+"""
+
+# ==============================================================================
+# STEP 2: VERIFY COMPLETE
+# ==============================================================================
+
+[[steps]]
+id = "verify-complete"
+title = "Confirm all work is complete"
+needs = ["gather-evidence"]
+description = """
+Verify that all planned work actually shipped.
+
+**1. Check bead status:**
+Read `.wrap-up/{{spec_name | slugify}}/beads.json`. Every bead in the epic
+should be in a closed/completed state.
+
+**2. Check PR status:**
+Read `.wrap-up/{{spec_name | slugify}}/prs.json`. Every PR should be in
+"merged" state.
+
+**3. Check for orphaned work:**
+Look for any branches that reference the spec but weren't merged:
+```bash
+git branch -r | grep "{{feature_branch}}" | grep -v "HEAD"
+```
+
+**4. If anything is incomplete:**
+- List the incomplete items explicitly
+- Determine if they were intentionally deferred or accidentally dropped
+- Note them for the plan-vs-reality diff
+
+**Exit criteria:** Complete inventory of what shipped vs. what was planned.
+Any incomplete items documented with reason (deferred/dropped/blocked).
+"""
+
+# ==============================================================================
+# STEP 3: PLAN VS REALITY DIFF
+# ==============================================================================
+
+[[steps]]
+id = "plan-vs-reality"
+title = "Diff original plan against what was actually built"
+needs = ["verify-complete"]
+description = """
+Compare what was planned to what shipped. This is the source material for
+spec annotation, the presentation, and the retrospective.
+
+**1. Read the original spec:**
+```bash
+cat .wrap-up/{{spec_name | slugify}}/original-spec.md
+```
+
+**2. Read the plan (if exists):**
+```bash
+cat .wrap-up/{{spec_name | slugify}}/plan.md
+```
+
+**3. Read beads (what was attempted):**
+```bash
+cat .wrap-up/{{spec_name | slugify}}/beads.json
+```
+
+**4. Read the diff stat (what actually changed):**
+```bash
+cat .wrap-up/{{spec_name | slugify}}/diff-stat.txt
+```
+
+**5. Produce a structured diff report at `.wrap-up/{{spec_name | slugify}}/plan-vs-reality.md`:**
+
+```markdown
+# Plan vs. Reality: {{spec_name}}
+
+## Shipped as Planned
+- [item]: delivered as specified
+
+## Modified During Implementation
+- [item]: planned X, built Y instead. Reason: ...
+
+## Deferred / Descoped
+- [item]: deferred because... (create follow-up bead if needed)
+
+## Added (Not in Original Plan)
+- [item]: added because we discovered... during implementation
+
+## Surprises & Unexpected Complexity
+- [item]: took longer/was harder because...
+```
+
+**6. For any deferred items, create follow-up beads:**
+```bash
+bd create "Follow-up: <deferred item>" --type=task --description="
+Deferred from {{spec_name}}. Originally planned but descoped because: <reason>
+Original spec: {{spec_path}}
+"
+```
+
+**Exit criteria:** plan-vs-reality.md exists with all five sections populated.
+Follow-up beads created for deferred items.
+"""
+
+# ==============================================================================
+# STEP 4: UPDATE DOCS
+# ==============================================================================
+
+[[steps]]
+id = "update-docs"
+title = "Update documentation to reflect shipped work"
+needs = ["plan-vs-reality"]
+description = """
+Update project documentation based on the manifest evidence. Only touch files
+that are actually affected — do not speculatively update unrelated docs.
+
+**1. Update PRODUCT.md feature inventory:**
+Read the current PRODUCT.md. Find the entry for this feature (or add one).
+Update status to "Shipped" with date and PR/spec references.
+
+**2. Update API documentation (if applicable):**
+Check the diff stat for changes to API routes, data models, or public interfaces.
+If any changed, update corresponding documentation files.
+
+**3. Update README (if applicable):**
+Only if the feature changes setup instructions, environment variables,
+or user-facing behavior documented in the README.
+
+**4. Update any configuration documentation:**
+If new environment variables, config keys, or integration points were added.
+
+**Scope control:** Use `.wrap-up/{{spec_name | slugify}}/diff-stat.txt` to determine
+which areas of the codebase changed. Only update docs for areas that actually changed.
+Do not add documentation for internal implementation details — only document
+what's visible to users or developers.
+
+**Exit criteria:** All documentation accurately reflects the shipped feature.
+PRODUCT.md is updated. No stale references to pre-implementation state remain
+in documented files.
+"""
+
+# ==============================================================================
+# STEP 5: ANNOTATE SPEC
+# ==============================================================================
+
+[[steps]]
+id = "annotate-spec"
+title = "Add implementation notes to the original spec"
+needs = ["plan-vs-reality"]
+description = """
+Add an "Implementation Notes" section to the original spec that documents
+what was actually built versus what was planned.
+
+**1. Read the plan-vs-reality diff:**
+```bash
+cat .wrap-up/{{spec_name | slugify}}/plan-vs-reality.md
+```
+
+**2. Append to the original spec file ({{spec_path}}):**
+
+Add this section at the end of the spec:
+
+```markdown
+---
+
+## Implementation Notes
+
+**Completed:** <date>
+**Feature Branch:** {{feature_branch}}
+**Convoy:** {{convoy_id}}
+
+### What Was Built
+<concise summary of what shipped, referencing PRs>
+
+### Deviations from Spec
+<what changed vs. the original plan and why>
+
+### Deferred Items
+<what was planned but not built, with links to follow-up beads>
+
+### Key Technical Decisions
+<decisions made during implementation that future developers should know>
+
+### Known Limitations
+<anything that works but has constraints or edge cases>
+```
+
+**3. Commit the spec annotation:**
+```bash
+git add {{spec_path}}
+git commit -m "docs: add implementation notes to {{spec_name}} spec"
+```
+
+**Exit criteria:** Original spec file has an Implementation Notes section that
+accurately describes what was built, deviations, and deferred items.
+"""
+
+# ==============================================================================
+# STEP 6: CLOSE LINEAR
+# ==============================================================================
+
+[[steps]]
+id = "close-linear"
+title = "Close all Linear tickets with completion comments"
+needs = ["plan-vs-reality"]
+description = """
+Mark all Linear tickets associated with this spec as Done.
+
+**1. Identify tickets:**
+From the beads manifest and PR bodies, collect all Linear ticket IDs
+(format: NUR-XX or similar).
+
+**2. For each ticket, add a completion comment:**
+Use the Linear MCP tools:
+```
+mcp__plugin_linear_linear__save_issue:
+  - status: "Done"
+  - comment: |
+      Completed as part of: {{spec_name}}
+      Feature branch: {{feature_branch}}
+      PRs: <list PR numbers and URLs>
+      Deviations: <any deviations from ticket description, or "None">
+```
+
+**3. Handle edge cases:**
+- Tickets that were partially completed → update with what was done, keep open
+  if follow-up work exists
+- Tickets that were deferred → add comment explaining deferral, link follow-up bead
+- Tickets not in the expected project → skip with a note in the manifest
+
+**Exit criteria:** All fully-completed Linear tickets marked Done with
+completion comments. Partial/deferred tickets updated with status.
+"""
+
+# ==============================================================================
+# STEP 7: GENERATE PRESENTATION
+# ==============================================================================
+
+[[steps]]
+id = "generate-presentation"
+title = "Create HTML presentation for founders"
+needs = ["plan-vs-reality", "update-docs"]
+description = """
+Generate a self-contained HTML presentation summarizing the completed work.
+This is for presenting to founders / stakeholders.
+
+**Create the file at:** `.wrap-up/{{spec_name | slugify}}/presentation.html`
+
+**Use this exact structure:**
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <title>{{spec_name}} — Completed</title>
+  <!-- Self-contained: inline all styles, no external dependencies -->
+  <!-- Use a clean, professional dark theme matching the Gas Town terminal aesthetic -->
+  <!-- Geist Mono for headings, Inter for body -->
+</head>
+<body>
+  <header>
+    <h1>{{spec_name}}</h1>
+    <p class="date">Completed: <datetime></p>
+    <p class="branch">Branch: {{feature_branch}}</p>
+  </header>
+
+  <section id="summary">
+    <h2>Executive Summary</h2>
+    <!-- 3-5 bullet points: what was built and why it matters -->
+  </section>
+
+  <section id="changes">
+    <h2>What Changed</h2>
+    <!-- Table: area | change | PR | status -->
+    <!-- Group by functional area, not by PR -->
+  </section>
+
+  <section id="decisions">
+    <h2>Key Decisions</h2>
+    <!-- For each major decision: what, why, alternatives considered -->
+    <!-- These come from plan-vs-reality.md "Deviations" and PR comments -->
+  </section>
+
+  <section id="metrics">
+    <h2>By the Numbers</h2>
+    <!-- PRs merged, files changed, lines added/removed, tests added -->
+    <!-- Duration: first PR opened → last PR merged -->
+  </section>
+
+  <section id="deferred">
+    <h2>Follow-Up Items</h2>
+    <!-- What was deferred and why, with bead/ticket links -->
+    <!-- Only include if there ARE deferred items -->
+  </section>
+
+  <section id="risks">
+    <h2>Known Limitations & Risks</h2>
+    <!-- Anything stakeholders should be aware of -->
+    <!-- Only include if there are genuine limitations -->
+  </section>
+</body>
+</html>
+```
+
+**Design guidelines:**
+- Self-contained single HTML file (inline CSS, no external deps)
+- Dark theme, clean typography (Geist Mono headings, Inter body)
+- Professional and scannable — founders will spend 2 minutes on this
+- Include actual data from the manifest, not placeholder text
+- No screenshots unless specifically relevant (diffs are more useful)
+
+**Exit criteria:** presentation.html exists, is self-contained, and accurately
+summarizes the completed work with real data from the manifest.
+"""
+
+# ==============================================================================
+# STEP 8: MINE LEARNINGS
+# ==============================================================================
+
+[[steps]]
+id = "mine-learnings"
+title = "Extract lessons from PR feedback and implementation surprises"
+needs = ["plan-vs-reality"]
+description = """
+Mine the evidence for lessons learned. Focus on what was surprising, novel,
+or reusable — not obvious observations.
+
+**1. Parse PR comments for human feedback:**
+Read `.wrap-up/{{spec_name | slugify}}/pr-feedback.json`.
+For each human-authored comment (not bots, not CI):
+- What did the human point out?
+- Was it a correction, a preference, or new information?
+- Is it specific to this spec, or generalizable?
+
+**2. Parse plan-vs-reality for surprises:**
+Read `.wrap-up/{{spec_name | slugify}}/plan-vs-reality.md`.
+For each "Surprise" or "Modified" item:
+- What did we not anticipate?
+- Why? Was it a knowledge gap, an incorrect assumption, or external change?
+- Would this surprise us again on a similar spec?
+
+**3. Parse CI failure history:**
+Check git log for "fix: resolve CI failure" commits. What patterns emerge?
+- Recurring test failures → flaky test infrastructure?
+- Build failures → dependency issues?
+- Lint failures → style misalignment?
+
+**4. Apply the "3-month test":**
+For each candidate learning, ask: "Would this be useful to know 3 months from
+now, on a different spec?" If no, discard it. We want durable insights,
+not session-specific notes.
+
+**5. Write findings to:**
+`.wrap-up/{{spec_name | slugify}}/learnings.md`
+
+Structure:
+```markdown
+# Learnings: {{spec_name}}
+
+## Human Feedback Themes
+- <pattern>: <what humans consistently pointed out>
+
+## Technical Surprises
+- <surprise>: <what we learned and why it matters going forward>
+
+## Process Observations
+- <observation>: <what worked well or poorly in the workflow>
+
+## Recommendations
+- <actionable change> for future specs
+```
+
+**Exit criteria:** learnings.md exists with findings organized by category.
+Only includes insights that pass the 3-month test.
+"""
+
+# ==============================================================================
+# STEP 9: INTERNALIZE
+# ==============================================================================
+
+[[steps]]
+id = "internalize"
+title = "Write durable learnings to gastown memory and CLAUDE.md"
+needs = ["mine-learnings"]
+description = """
+Persist the most important learnings to Gas Town's memory system so they
+inform future conversations and specs.
+
+**CONSERVATIVE FILTER:** Only write memories that meet ALL of these criteria:
+1. Surprising or non-obvious (not derivable from reading the code)
+2. Reusable across future specs (not spec-specific)
+3. Not already captured in existing memories or CLAUDE.md
+
+**1. Read existing memories:**
+```bash
+cat ~/.claude/projects/-Users-aj-gt/memory/MEMORY.md
+```
+
+**2. Read current learnings:**
+```bash
+cat .wrap-up/{{spec_name | slugify}}/learnings.md
+```
+
+**3. For each learning that passes the filter:**
+
+Write a memory file:
+```markdown
+---
+name: <descriptive name>
+description: <one-line summary — be specific>
+type: feedback  (or project, depending on content)
+---
+
+<the learning>
+
+**Why:** <context from this spec>
+**How to apply:** <when this should influence future work>
+```
+
+And add a pointer to MEMORY.md.
+
+**4. Update CLAUDE.md (only if warranted):**
+Only update CLAUDE.md if the learning represents a durable project-wide
+convention or constraint. Examples:
+- "Bayou Energy API requires batch requests under 50 items" → YES (technical constraint)
+- "We prefer small PRs" → NO (already obvious)
+
+**5. Do NOT write memories for:**
+- Temporary state or in-progress work
+- Code patterns visible in the codebase
+- Git history that git log can retrieve
+- Anything already in CLAUDE.md
+
+**Exit criteria:** Relevant memories written. MEMORY.md updated (if applicable).
+CLAUDE.md updated only if a durable convention was discovered.
+"""
+
+# ==============================================================================
+# STEP 10: WRITE RETROSPECTIVE
+# ==============================================================================
+
+[[steps]]
+id = "write-retro"
+title = "Generate retrospective document"
+needs = ["mine-learnings", "generate-presentation"]
+description = """
+Write a structured retrospective covering the full spec lifecycle.
+
+**Create:** `.wrap-up/{{spec_name | slugify}}/retrospective.md`
+
+**Structure:**
+
+```markdown
+# Retrospective: {{spec_name}}
+
+**Date:** <completion date>
+**Duration:** <first bead slung> to <last PR merged>
+**Scope:** <N beads planned, M shipped, K deferred>
+
+## What Went Well
+- <specific positive outcomes with evidence>
+- Focus on process AND product wins
+
+## What Didn't Go Well
+- <specific problems with impact>
+- Include: delays, rework, miscommunication, wrong assumptions
+
+## What Surprised Us
+- <from plan-vs-reality.md surprises section>
+
+## Human Feedback Summary
+- <from learnings.md human feedback themes>
+- What did the human consistently ask for or correct?
+
+## Key Metrics
+| Metric | Value |
+|--------|-------|
+| PRs merged | N |
+| CI fix cycles | N |
+| Human review rounds | N |
+| Files changed | N |
+| Lines added | N |
+| Lines removed | N |
+| Calendar days | N |
+| Follow-up beads created | N |
+
+## Recommendations for Next Spec
+- <actionable changes to the formula or process>
+- <things to do differently>
+- <things to keep doing>
+```
+
+**Sources:** Pull data from:
+- `.wrap-up/{{spec_name | slugify}}/plan-vs-reality.md`
+- `.wrap-up/{{spec_name | slugify}}/learnings.md`
+- `.wrap-up/{{spec_name | slugify}}/prs.json`
+- `.wrap-up/{{spec_name | slugify}}/beads.json`
+- `.wrap-up/{{spec_name | slugify}}/commit-log.txt`
+- `.wrap-up/{{spec_name | slugify}}/diff-stat.txt`
+
+**Exit criteria:** retrospective.md exists with all sections populated using
+real data from the manifest. Metrics are accurate counts, not estimates.
+"""
+
+# ==============================================================================
+# VARIABLES
+# ==============================================================================
+
+[vars.spec_path]
+description = "Path to the original spec file"
+required = true
+
+[vars.spec_name]
+description = "Human-readable name (e.g., 'Bayou Energy Migration')"
+required = true
+
+[vars.feature_branch]
+description = "The feature branch that was merged to main"
+required = true
+
+[vars.convoy_id]
+description = "Convoy ID tracking the beads for this spec"
+required = false
+default = ""
+
+[vars.linear_project]
+description = "Linear project name for ticket queries"
+required = false
+default = ""
+
+[vars.epic_id]
+description = "Epic bead ID for the parent tracking bead"
+required = false
+default = ""
