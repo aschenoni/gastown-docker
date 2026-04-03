@@ -136,13 +136,13 @@ cmd_mayor() {
     require_running "$instance"
 
     # Check if the mayor tmux session exists
-    if docker exec "$cname" tmux has-session -t hq-mayor 2>/dev/null; then
+    if docker exec --user agent "$cname" tmux has-session -t hq-mayor 2>/dev/null; then
         echo "Attaching to Mayor in instance '$instance'..."
-        docker exec -it "$cname" tmux attach-session -t hq-mayor
+        docker exec -it --user agent "$cname" tmux attach-session -t hq-mayor
     else
         # No mayor session yet — start one via gt mayor attach
         echo "No Mayor session found in '$instance'. Starting one..."
-        docker exec -it "$cname" /app/gastown/gt mayor attach
+        docker exec -it --user agent "$cname" /app/gastown/gt mayor attach
     fi
 }
 
@@ -151,7 +151,7 @@ cmd_shell() {
     local cname
     cname="$(container_name "$instance")"
     require_running "$instance"
-    docker exec -it "$cname" zsh
+    docker exec -it --user agent "$cname" zsh
 }
 
 cmd_exec_cmd() {
@@ -161,9 +161,9 @@ cmd_exec_cmd() {
     cname="$(container_name "$instance")"
     require_running "$instance"
     if [[ -t 0 ]]; then
-        docker exec -it "$cname" "$@"
+        docker exec -it --user agent "$cname" "$@"
     else
-        docker exec "$cname" "$@"
+        docker exec --user agent "$cname" "$@"
     fi
 }
 
