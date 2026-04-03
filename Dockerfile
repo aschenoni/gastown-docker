@@ -23,7 +23,20 @@ RUN apt-get update && apt-get install -y \
     tini \
     ttyd \
     vim \
+    unzip \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+# Install `aws` CLI for Bedrock authentication
+RUN ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in \
+        amd64) AWS_ARCH=x86_64 ;; \
+        arm64) AWS_ARCH=aarch64 ;; \
+        *) echo "Unsupported architecture: $ARCH"; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip" -o "awscliv2.zip" && \
+    unzip -q awscliv2.zip && \
+    ./aws/install && \
+    rm -rf awscliv2.zip aws/
 
 # Install Go from official tarball (apt golang-go is too old)
 RUN ARCH=$(dpkg --print-architecture) && \
