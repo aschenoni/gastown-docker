@@ -1,0 +1,6 @@
+formula = "Sample test formula"
+type = "workflow"
+pour = true
+
+[variables]
+topic = { required = true, description = "What to test" }

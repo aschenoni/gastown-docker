@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run tests/unit",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration --test-timeout=300000",
+    "test:all": "vitest run",
+    "test:watch": "vitest tests/unit"
+  },
+  "devDependencies": {
+    "execa": "^9.5.2",
+    "vitest": "^3.1.1"
+  }
+}
