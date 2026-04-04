@@ -26,6 +26,10 @@ RUN apt-get update && apt-get install -y \
     unzip \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
+# Pre-seed GitHub SSH host keys so git-over-SSH works without interactive prompts
+RUN mkdir -p /etc/ssh/ssh_known_hosts.d && \
+    ssh-keyscan -t ed25519,ecdsa,rsa github.com >> /etc/ssh/ssh_known_hosts 2>/dev/null
+
 # Install `aws` CLI for Bedrock authentication
 RUN ARCH=$(dpkg --print-architecture) && \
     case "$ARCH" in \
@@ -44,6 +48,8 @@ RUN ARCH=$(dpkg --print-architecture) && \
 ENV PATH="/app/gastown:/usr/local/go/bin:/home/agent/go/bin:${PATH}"
 
 # Install beads (bd) and dolt
+# Cache-bust bd install so rebuilds pick up the latest version (e.g. agent issue type support)
+ARG BD_CACHE_BUST=1
 RUN curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
 RUN curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/install.sh | bash
 
