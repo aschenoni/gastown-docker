@@ -11,6 +11,10 @@ if [ -n "$GIT_USER" ] && [ -n "$GIT_EMAIL" ]; then
     dolt config --global --add user.email "$GIT_EMAIL"
 fi
 
+# Register "agent" as a custom bd issue type (removed from beads core,
+# but required by gt sling for polecat tracking beads).
+bd config set types.custom "agent" 2>/dev/null || true
+
 if [ ! -f /gt/mayor/town.json ]; then
     echo "Initializing Gas Town workspace at /gt..."
     /app/gastown/gt install /gt --git
