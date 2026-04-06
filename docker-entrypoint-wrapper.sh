@@ -7,6 +7,11 @@ if [ -S /run/host-services/ssh-auth.sock ]; then
     chmod 666 /run/host-services/ssh-auth.sock
 fi
 
+# Ensure volume mount points are owned by agent (uid 1000).
+# Docker creates volume roots as root; this fixes ownership on first
+# start and recovers from any root-owned files left by prior runs.
+chown -R agent:agent /gt /home/agent
+
 # Drop to agent user with a full login environment.
 # Using su -l ensures HOME, USER, UID are all set correctly so that
 # gt, tmux, and dolt all use /tmp/tmux-1000/ (agent's UID) consistently.
