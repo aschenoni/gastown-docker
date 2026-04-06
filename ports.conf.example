@@ -1,0 +1,13 @@
+# Static port assignments for gt-docker instances.
+# Copy this file to ports.conf and customize for your setup.
+#
+# Format: <instance>.dashboard=<port>
+#         <instance>.terminal=<port>
+#         <instance>.webstart=<port>
+#
+# Instances not listed here get auto-assigned ports.
+
+# Example configuration:
+# mytown.dashboard=8081
+# mytown.terminal=7681
+# mytown.webstart=4000

@@ -46,15 +46,30 @@ Usage:
   gt-docker exec <instance> <cmd..>  Run a command in the container
   gt-docker list                     List running gastown containers
   gt-docker logs <instance>          Tail container logs
+
   gt-docker formulas list            List custom formulas
   gt-docker formulas add <file>      Add a formula to the collection
   gt-docker formulas sync <instance> Push formulas to a running instance
   gt-docker formulas sync --all      Push to all running instances
 
+  gt-docker settings sync <instance> Push plugin settings to a running instance
+  gt-docker settings sync --all      Push to all running instances
+  gt-docker settings show            Show disabled plugins list
+
+  gt-docker tier <instance> [tier]   Get or set cost tier (standard/economy/budget)
+  gt-docker tier --all [tier]        Get or set tier for all running instances
+
 Environment:
   GIT_USER       Git user.name  (default: TestUser)
   GIT_EMAIL      Git user.email (default: test@example.com)
+  GT_COST_TIER   Cost tier for new instances (default: budget)
   DASHBOARD_PORT Host port for dashboard (default: auto-assigned)
+  WEB_PORTS      Host-to-container web port range (default: 3000-3050:3000-3050)
+
+Cost Tiers:
+  standard       All roles use Opus (highest quality, highest cost)
+  economy        Patrol roles use Sonnet/Haiku, workers use Opus
+  budget         Patrol roles use Haiku, workers use Sonnet (default)
 
 Examples:
   gt-docker up alpha
@@ -62,6 +77,8 @@ Examples:
   gt-docker mayor alpha              # attach to alpha's Mayor
   gt-docker exec bravo gt agents     # check agents in bravo
   gt-docker list                     # see all running instances
+  gt-docker tier alpha budget        # switch alpha to budget tier
+  gt-docker settings sync --all      # push plugin settings everywhere
   gt-docker destroy alpha            # tear down alpha completely
 EOF
     exit 1
@@ -92,17 +109,28 @@ cmd_up() {
     compose_env "$instance"
     export DASHBOARD_PORT="${DASHBOARD_PORT:-$(get_port "$instance" dashboard)}"
     export TERMINAL_PORT="${TERMINAL_PORT:-$(get_port "$instance" terminal)}"
-    echo "Starting gastown instance '$instance'..."
+    local webstart
+    webstart="$(get_port "$instance" webstart)"
+    if [[ "$webstart" != "0" ]]; then
+        local webend=$((webstart + 50))
+        export WEB_PORTS="${WEB_PORTS:-${webstart}-${webend}:3000-3050}"
+    else
+        export WEB_PORTS="${WEB_PORTS:-3000-3050:3000-3050}"
+    fi
+    export GT_COST_TIER="${GT_COST_TIER:-budget}"
+    echo "Starting gastown instance '$instance' (cost tier: $GT_COST_TIER)..."
     docker compose -f "$COMPOSE_FILE" up -d --build
     echo ""
     echo "Instance '$instance' is running."
     echo "  Container:  $(container_name "$instance")"
+    echo "  Cost tier:  $GT_COST_TIER"
     if [[ "$DASHBOARD_PORT" != "0" ]]; then
         echo "  Dashboard:  http://${instance}.town"
     fi
     if [[ "$TERMINAL_PORT" != "0" ]]; then
         echo "  Terminal:   http://terminal.${instance}.town"
     fi
+    echo "  Web ports:  ${WEB_PORTS%:*} → container 3000-3050"
     echo ""
     echo "Services (Dolt, Daemon, Deacon, Mayor, Dashboard, Terminal)"
     echo "start automatically inside the container."
@@ -289,6 +317,138 @@ FEOF
     esac
 }
 
+sync_settings_to_instance() {
+    local cname="$1"
+    local inst="$2"
+
+    # Copy settings files into the container
+    docker cp "$SCRIPT_DIR/settings/disabled-plugins.json" "$cname:/tmp/disabled-plugins.json"
+    docker cp "$SCRIPT_DIR/settings/apply-settings.sh" "$cname:/tmp/apply-settings.sh"
+    docker exec "$cname" chmod +x /tmp/apply-settings.sh
+
+    # Create a temp settings dir and run the apply script
+    docker exec "$cname" mkdir -p /tmp/custom-settings
+    docker exec "$cname" cp /tmp/disabled-plugins.json /tmp/custom-settings/
+    docker exec "$cname" /tmp/apply-settings.sh /tmp/custom-settings /gt
+}
+
+cmd_settings() {
+    local subcmd="${1:-show}"
+    shift 2>/dev/null || true
+
+    case "$subcmd" in
+        show)
+            echo "Disabled plugins (settings/disabled-plugins.json):"
+            echo ""
+            python3 -c "
+import json
+with open('$SCRIPT_DIR/settings/disabled-plugins.json') as f:
+    data = json.load(f)
+for k, v in data.items():
+    if not k.startswith('_'):
+        print(f'  {k}: {v}')
+"
+            ;;
+        sync)
+            local instance="${1:-}"
+            if [[ -z "$instance" ]]; then
+                echo "Usage: gt-docker settings sync <instance|--all>" >&2
+                exit 1
+            fi
+            if [[ "$instance" == "--all" ]]; then
+                echo "Syncing plugin settings to all running instances..."
+                for cname in $(docker ps --filter "name=gastown-" --format "{{.Names}}"); do
+                    local inst="${cname#gastown-}"
+                    echo "  → $inst"
+                    sync_settings_to_instance "$cname" "$inst"
+                done
+                echo "Done."
+            else
+                local cname
+                cname="$(container_name "$instance")"
+                require_running "$instance"
+                echo "Syncing plugin settings to instance '$instance'..."
+                sync_settings_to_instance "$cname" "$instance"
+                echo "Done."
+            fi
+            ;;
+        *)
+            cat <<'SEOF'
+gt-docker settings — manage Claude Code plugin settings
+
+Usage:
+  gt-docker settings show               Show disabled plugins list
+  gt-docker settings sync <instance>     Push plugin settings to a running instance
+  gt-docker settings sync --all          Push to all running instances
+
+Edit settings/disabled-plugins.json to control which plugins are disabled.
+SEOF
+            ;;
+    esac
+}
+
+cmd_tier() {
+    local target="${1:-}"
+    local new_tier="${2:-}"
+
+    if [[ -z "$target" ]]; then
+        cat <<'TEOF'
+gt-docker tier — manage cost tiers for Gas Town instances
+
+Usage:
+  gt-docker tier <instance>          Show current cost tier
+  gt-docker tier <instance> <tier>   Set cost tier (standard/economy/budget)
+  gt-docker tier --all               Show tier for all running instances
+  gt-docker tier --all <tier>        Set tier for all running instances
+
+Tiers:
+  standard   All roles use Opus (highest quality, highest cost)
+  economy    Patrol roles use Sonnet/Haiku, workers use Opus
+  budget     Patrol roles use Haiku, workers use Sonnet
+TEOF
+        return
+    fi
+
+    if [[ "$target" == "--all" ]]; then
+        if [[ -z "$new_tier" ]]; then
+            echo "Cost tiers for running instances:"
+            echo ""
+            for cname in $(docker ps --filter "name=gastown-" --format "{{.Names}}"); do
+                local inst="${cname#gastown-}"
+                local tier
+                tier=$(docker exec "$cname" sh -c 'echo ${GT_COST_TIER:-standard}' 2>/dev/null)
+                printf "  %-20s %s\n" "$inst" "$tier"
+            done
+        else
+            echo "Setting cost tier to '$new_tier' for all running instances..."
+            for cname in $(docker ps --filter "name=gastown-" --format "{{.Names}}"); do
+                local inst="${cname#gastown-}"
+                echo "  → $inst: restarting with --cost-tier $new_tier"
+                docker exec "$cname" /app/gastown/gt stop 2>/dev/null || true
+                docker exec -e "GT_COST_TIER=$new_tier" "$cname" sh -c \
+                    '/app/gastown/gt up --cost-tier '"$new_tier"' 2>&1 || echo "Warning: gt up failed"'
+            done
+            echo "Done."
+        fi
+    else
+        local cname
+        cname="$(container_name "$target")"
+        require_running "$target"
+
+        if [[ -z "$new_tier" ]]; then
+            local tier
+            tier=$(docker exec "$cname" sh -c 'echo ${GT_COST_TIER:-standard}' 2>/dev/null)
+            echo "Instance '$target' cost tier: $tier"
+        else
+            echo "Setting cost tier to '$new_tier' for instance '$target'..."
+            docker exec "$cname" /app/gastown/gt stop 2>/dev/null || true
+            docker exec -e "GT_COST_TIER=$new_tier" "$cname" sh -c \
+                '/app/gastown/gt up --cost-tier '"$new_tier"' 2>&1 || echo "Warning: gt up failed"'
+            echo "Done."
+        fi
+    fi
+}
+
 # --- main ---
 
 [[ $# -lt 1 ]] && usage
@@ -330,6 +490,12 @@ case "$cmd" in
         ;;
     formulas|formula)
         cmd_formulas "$@"
+        ;;
+    settings)
+        cmd_settings "$@"
+        ;;
+    tier|cost-tier)
+        cmd_tier "$@"
         ;;
     help|--help|-h)
         usage

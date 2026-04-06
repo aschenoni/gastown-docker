@@ -48,7 +48,13 @@ Add a pair of lines for each instance you create.
 
 ### 2. Configure ports
 
-Edit `ports.conf` to assign static ports for each instance:
+Create a `ports.conf` file to assign static ports for each instance:
+
+```bash
+cp ports.conf.example ports.conf
+```
+
+Then edit `ports.conf`:
 
 ```conf
 mytown.dashboard=8081

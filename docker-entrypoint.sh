@@ -62,13 +62,24 @@ if [ -d "$CUSTOM_PLUGIN_DIR" ] && [ "$(ls -A "$CUSTOM_PLUGIN_DIR" 2>/dev/null)" 
     fi
 fi
 
+# Apply Claude Code settings (disable unnecessary plugins to save tokens)
+echo "Applying Claude Code settings..."
+/app/custom-settings/apply-settings.sh /app/custom-settings /gt 2>&1 || true
+
 # Start Dolt (needed for dashboard even if Claude isn't authenticated yet)
 echo "Starting Dolt..."
 /app/gastown/gt dolt start 2>&1 || true
 
+# Build cost tier flags for gt up
+GT_UP_FLAGS=""
+if [ -n "$GT_COST_TIER" ]; then
+    GT_UP_FLAGS="--cost-tier $GT_COST_TIER"
+    echo "Using cost tier: $GT_COST_TIER"
+fi
+
 # Try to start full Gas Town services — may fail if Claude isn't authenticated
 echo "Starting Gas Town services..."
-/app/gastown/gt up 2>&1 || echo "Warning: gt up failed (run 'claude login' then 'gt up' to complete setup)"
+/app/gastown/gt up $GT_UP_FLAGS 2>&1 || echo "Warning: gt up failed (run 'claude login' then 'gt up' to complete setup)"
 
 # Start dashboard on port 8080 (background)
 echo "Starting dashboard on :8080..."
