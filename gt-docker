@@ -107,6 +107,8 @@ require_running() {
 cmd_up() {
     local instance="$1"
     compose_env "$instance"
+    export GIT_USER="${GIT_USER:-TestUser}"
+    export GIT_EMAIL="${GIT_EMAIL:-test@example.com}"
     export DASHBOARD_PORT="${DASHBOARD_PORT:-$(get_port "$instance" dashboard)}"
     export TERMINAL_PORT="${TERMINAL_PORT:-$(get_port "$instance" terminal)}"
     local webstart
