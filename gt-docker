@@ -458,33 +458,177 @@ shift
 
 case "$cmd" in
     up|start)
+        if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+            cat <<'UPEOF'
+gt-docker up — create and start an instance
+
+Usage:
+  gt-docker up <instance>
+
+Creates a new Gas Town Docker instance with the specified name.
+The instance will start all services (Dolt, Daemon, Deacon, Mayor, Dashboard, Terminal).
+
+Environment variables:
+  GT_COST_TIER   Cost tier: standard/economy/budget (default: budget)
+  DASHBOARD_PORT Host port for dashboard (default: auto-assigned from ports.conf)
+  TERMINAL_PORT  Host port for terminal (default: auto-assigned from ports.conf)
+  WEB_PORTS      Host-to-container web port range (default: 3000-3050:3000-3050)
+  GIT_USER       Git user.name  (default: TestUser)
+  GIT_EMAIL      Git user.email (default: test@example.com)
+
+Examples:
+  gt-docker up alpha
+  GT_COST_TIER=standard gt-docker up bravo
+UPEOF
+            exit 0
+        fi
         [[ $# -lt 1 ]] && { echo "Usage: gt-docker up <instance>" >&2; exit 1; }
         cmd_up "$1"
         ;;
     down|stop)
+        if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+            cat <<'DOWNEOF'
+gt-docker down — stop and remove an instance
+
+Usage:
+  gt-docker down <instance>
+
+Stops and removes the container for the specified instance.
+Volumes are preserved, so you can restart the instance later with all data intact.
+
+To completely remove an instance including volumes, use:
+  gt-docker destroy <instance>
+
+Examples:
+  gt-docker down alpha
+DOWNEOF
+            exit 0
+        fi
         [[ $# -lt 1 ]] && { echo "Usage: gt-docker down <instance>" >&2; exit 1; }
         cmd_down "$1"
         ;;
     destroy|rm)
+        if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+            cat <<'DESTROYEOF'
+gt-docker destroy — stop, remove, and delete volumes
+
+Usage:
+  gt-docker destroy <instance>
+
+Completely removes the specified instance, including:
+  - The container
+  - All associated volumes
+  - All data (Git repositories, databases, logs, etc.)
+
+This action cannot be undone. Use with caution.
+
+To stop an instance but keep its data, use:
+  gt-docker down <instance>
+
+Examples:
+  gt-docker destroy alpha
+DESTROYEOF
+            exit 0
+        fi
         [[ $# -lt 1 ]] && { echo "Usage: gt-docker destroy <instance>" >&2; exit 1; }
         cmd_destroy "$1"
         ;;
     mayor|attach)
+        if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+            cat <<'MAYOREOF'
+gt-docker mayor — attach to the Mayor tmux session
+
+Usage:
+  gt-docker mayor <instance>
+
+Attaches to the Mayor tmux session in the specified instance.
+If no Mayor session exists, one will be started automatically.
+
+To detach from the Mayor session:
+  Press Ctrl+B, then D
+
+Examples:
+  gt-docker mayor alpha
+MAYOREOF
+            exit 0
+        fi
         [[ $# -lt 1 ]] && { echo "Usage: gt-docker mayor <instance>" >&2; exit 1; }
         cmd_mayor "$1"
         ;;
     shell|sh)
+        if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+            cat <<'SHELLEOF'
+gt-docker shell — open a shell in the container
+
+Usage:
+  gt-docker shell <instance>
+
+Opens an interactive zsh shell in the specified instance container.
+You'll be logged in as the 'agent' user in the /gt directory.
+
+Examples:
+  gt-docker shell alpha
+  gt-docker shell bravo
+SHELLEOF
+            exit 0
+        fi
         [[ $# -lt 1 ]] && { echo "Usage: gt-docker shell <instance>" >&2; exit 1; }
         cmd_shell "$1"
         ;;
     exec)
+        if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+            cat <<'EXECEOF'
+gt-docker exec — run a command in the container
+
+Usage:
+  gt-docker exec <instance> <command> [args...]
+
+Runs the specified command in the container as the 'agent' user.
+
+Examples:
+  gt-docker exec alpha gt agents
+  gt-docker exec bravo gt status
+  gt-docker exec alpha ls -la
+EXECEOF
+            exit 0
+        fi
         [[ $# -lt 1 ]] && { echo "Usage: gt-docker exec <instance> <cmd..>" >&2; exit 1; }
         cmd_exec_cmd "$@"
         ;;
     list|ls|ps)
+        if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+            cat <<'LISTEOF'
+gt-docker list — list running gastown containers
+
+Usage:
+  gt-docker list
+
+Shows all currently running Gas Town Docker instances with their status and ports.
+
+Examples:
+  gt-docker list
+  gt-docker ls
+LISTEOF
+            exit 0
+        fi
         cmd_list
         ;;
     logs)
+        if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+            cat <<'LOGSEOF'
+gt-docker logs — tail container logs
+
+Usage:
+  gt-docker logs <instance>
+
+Streams the logs from the specified instance container.
+Press Ctrl+C to stop following the logs.
+
+Examples:
+  gt-docker logs alpha
+LOGSEOF
+            exit 0
+        fi
         [[ $# -lt 1 ]] && { echo "Usage: gt-docker logs <instance>" >&2; exit 1; }
         cmd_logs "$1"
         ;;
