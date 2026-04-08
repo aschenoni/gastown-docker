@@ -62,6 +62,9 @@ RUN echo 'export TERM="xterm-256color"' >> /etc/profile.d/term.sh && \
 RUN printf 'set -g history-limit 50000\nset -g mouse on\nbind -n F12 set -g mouse \\; display-message "mouse #{?mouse,on,off}"\n' > /root/.tmux.conf && \
     cp /root/.tmux.conf /home/agent/.tmux.conf && chown agent:agent /home/agent/.tmux.conf
 
+# Suppress zsh new-user setup wizard
+RUN touch /home/agent/.zshrc && chown agent:agent /home/agent/.zshrc
+
 # Root-owned wrapper that fixes SSH socket perms then drops to agent
 COPY docker-entrypoint-wrapper.sh /app/docker-entrypoint-wrapper.sh
 RUN chmod 755 /app/docker-entrypoint-wrapper.sh
