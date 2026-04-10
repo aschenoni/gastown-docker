@@ -59,6 +59,11 @@ Usage:
   gt-docker tier <instance> [tier]   Get or set cost tier (standard/economy/budget)
   gt-docker tier --all [tier]        Get or set tier for all running instances
 
+  gt-docker memory export <instance> <file>    Export memories to a tar.gz file
+  gt-docker memory import <instance> <file>    Import memories from a tar.gz file
+  gt-docker memory sync <source> <dest>        Sync memories between instances
+  gt-docker memory list <instance>             List memories in an instance
+
 Environment:
   GIT_USER       Git user.name  (default: TestUser)
   GIT_EMAIL      Git user.email (default: test@example.com)
@@ -449,6 +454,271 @@ TEOF
     fi
 }
 
+cmd_memory() {
+    local subcmd="${1:-}"
+    shift 2>/dev/null || true
+
+    case "$subcmd" in
+        export)
+            local instance="${1:-}"
+            local output_file="${2:-}"
+            if [[ -z "$instance" || -z "$output_file" ]]; then
+                echo "Usage: gt-docker memory export <instance> <output-file>" >&2
+                exit 1
+            fi
+            cmd_memory_export "$instance" "$output_file"
+            ;;
+        import)
+            local instance="${1:-}"
+            local input_file="${2:-}"
+            if [[ -z "$instance" || -z "$input_file" ]]; then
+                echo "Usage: gt-docker memory import <instance> <input-file>" >&2
+                exit 1
+            fi
+            cmd_memory_import "$instance" "$input_file"
+            ;;
+        sync)
+            local source="${1:-}"
+            local dest="${2:-}"
+            if [[ -z "$source" || -z "$dest" ]]; then
+                echo "Usage: gt-docker memory sync <source-instance> <dest-instance>" >&2
+                exit 1
+            fi
+            cmd_memory_sync "$source" "$dest"
+            ;;
+        list|ls)
+            local instance="${1:-}"
+            if [[ -z "$instance" ]]; then
+                echo "Usage: gt-docker memory list <instance>" >&2
+                exit 1
+            fi
+            cmd_memory_list "$instance"
+            ;;
+        *)
+            cat <<'MEOF'
+gt-docker memory — manage Gas Town memories across instances
+
+Usage:
+  gt-docker memory export <instance> <file>    Export memories to tar.gz file
+  gt-docker memory import <instance> <file>    Import memories from tar.gz file
+  gt-docker memory sync <source> <dest>        Sync memories between instances
+  gt-docker memory list <instance>             List memories in an instance
+
+What gets synced:
+  - bd kv store (Gas Town agent memories with memory.* prefix)
+  - Claude Code auto-memory files (~/.claude/projects/*/memory/)
+  - Brainstorm artifacts (/gt/.brainstorms/)
+
+Examples:
+  gt-docker memory export alpha memories-alpha.tar.gz
+  gt-docker memory import bravo memories-alpha.tar.gz
+  gt-docker memory sync alpha bravo              # alpha → bravo
+  gt-docker memory list alpha
+MEOF
+            ;;
+    esac
+}
+
+cmd_memory_export() {
+    local instance="$1"
+    local output_file="$2"
+    local cname
+    cname="$(container_name "$instance")"
+    require_running "$instance"
+
+    echo "Exporting memories from instance '$instance'..."
+
+    # Create temp directory for export
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    trap "rm -rf '$tmpdir'" EXIT
+
+    # Export bd kv store
+    echo "  → Exporting bd kv store..."
+    docker exec "$cname" bd kv list --json > "$tmpdir/bd-kv.json" 2>/dev/null || echo "{}" > "$tmpdir/bd-kv.json"
+
+    # Export Claude Code memory
+    echo "  → Exporting Claude Code memory..."
+    mkdir -p "$tmpdir/claude-memory"
+    docker exec "$cname" sh -c 'if [ -d ~/.claude/projects ]; then tar czf - -C ~/.claude/projects . 2>/dev/null; fi' | tar xzf - -C "$tmpdir/claude-memory" 2>/dev/null || true
+
+    # Export brainstorm artifacts
+    echo "  → Exporting brainstorm artifacts..."
+    mkdir -p "$tmpdir/brainstorms"
+    docker exec "$cname" sh -c 'if [ -d /gt/.brainstorms ]; then tar czf - -C /gt/.brainstorms . 2>/dev/null; fi' | tar xzf - -C "$tmpdir/brainstorms" 2>/dev/null || true
+
+    # Create final archive
+    echo "  → Creating archive..."
+    tar czf "$output_file" -C "$tmpdir" . 2>/dev/null
+
+    echo "Exported memories to: $output_file"
+    echo ""
+    echo "Archive contents:"
+    tar tzf "$output_file" | head -20
+    local total_files
+    total_files=$(tar tzf "$output_file" | wc -l)
+    if [[ $total_files -gt 20 ]]; then
+        echo "... and $((total_files - 20)) more files"
+    fi
+}
+
+cmd_memory_import() {
+    local instance="$1"
+    local input_file="$2"
+    local cname
+    cname="$(container_name "$instance")"
+    require_running "$instance"
+
+    if [[ ! -f "$input_file" ]]; then
+        echo "Error: input file '$input_file' not found" >&2
+        exit 1
+    fi
+
+    echo "Importing memories into instance '$instance'..."
+
+    # Create temp directory for import
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    trap "rm -rf '$tmpdir'" EXIT
+
+    # Extract archive
+    echo "  → Extracting archive..."
+    tar xzf "$input_file" -C "$tmpdir"
+
+    # Import bd kv store with conflict handling
+    if [[ -f "$tmpdir/bd-kv.json" ]]; then
+        echo "  → Importing bd kv store..."
+
+        # Get existing keys
+        local existing_kv
+        existing_kv=$(docker exec "$cname" bd kv list --json 2>/dev/null || echo "{}")
+
+        # Parse and import each key-value pair
+        python3 <<PYEOF
+import json
+import subprocess
+import sys
+
+# Load source and existing kv data
+with open("$tmpdir/bd-kv.json") as f:
+    source_kv = json.load(f)
+
+existing_kv = json.loads('''$existing_kv''')
+
+conflicts = []
+imports = []
+
+for key, value in source_kv.items():
+    if key in existing_kv and existing_kv[key] != value:
+        conflicts.append((key, existing_kv[key], value))
+    else:
+        imports.append((key, value))
+
+# Import non-conflicting keys
+for key, value in imports:
+    subprocess.run(["docker", "exec", "$cname", "bd", "kv", "set", key, value], check=False)
+
+# Handle conflicts
+if conflicts:
+    print("\n⚠️  Conflicts detected:")
+    print("")
+    for key, existing_val, new_val in conflicts:
+        print(f"  Key: {key}")
+        print(f"    Existing: {existing_val[:100]}...")
+        print(f"    Import:   {new_val[:100]}...")
+        print("")
+        while True:
+            choice = input("  Keep [e]xisting, import [n]ew, or [s]kip? ").strip().lower()
+            if choice in ['e', 'n', 's']:
+                break
+        if choice == 'n':
+            subprocess.run(["docker", "exec", "$cname", "bd", "kv", "set", key, new_val], check=False)
+            print(f"  ✓ Imported {key}")
+        elif choice == 'e':
+            print(f"  ✓ Kept existing {key}")
+        else:
+            print(f"  ⊘ Skipped {key}")
+        print("")
+
+print(f"Imported {len(imports)} keys, handled {len(conflicts)} conflicts")
+PYEOF
+    fi
+
+    # Import Claude Code memory
+    if [[ -d "$tmpdir/claude-memory" && -n "$(ls -A "$tmpdir/claude-memory" 2>/dev/null)" ]]; then
+        echo "  → Importing Claude Code memory..."
+        tar czf - -C "$tmpdir/claude-memory" . | docker exec -i "$cname" sh -c 'mkdir -p ~/.claude/projects && tar xzf - -C ~/.claude/projects'
+    fi
+
+    # Import brainstorm artifacts
+    if [[ -d "$tmpdir/brainstorms" && -n "$(ls -A "$tmpdir/brainstorms" 2>/dev/null)" ]]; then
+        echo "  → Importing brainstorm artifacts..."
+        tar czf - -C "$tmpdir/brainstorms" . | docker exec -i "$cname" sh -c 'mkdir -p /gt/.brainstorms && tar xzf - -C /gt/.brainstorms'
+    fi
+
+    echo "✓ Import complete"
+}
+
+cmd_memory_sync() {
+    local source="$1"
+    local dest="$2"
+
+    echo "Syncing memories from '$source' → '$dest'..."
+
+    # Create temp file for export
+    local tmpfile
+    tmpfile=$(mktemp --suffix=.tar.gz)
+    trap "rm -f '$tmpfile'" EXIT
+
+    # Export from source
+    cmd_memory_export "$source" "$tmpfile"
+
+    echo ""
+
+    # Import to destination
+    cmd_memory_import "$dest" "$tmpfile"
+
+    echo ""
+    echo "✓ Sync complete: '$source' → '$dest'"
+}
+
+cmd_memory_list() {
+    local instance="$1"
+    local cname
+    cname="$(container_name "$instance")"
+    require_running "$instance"
+
+    echo "Memories in instance '$instance':"
+    echo ""
+
+    # List bd kv store
+    echo "bd kv store:"
+    local kv_json
+    kv_json=$(docker exec "$cname" bd kv list --json 2>/dev/null || echo "{}")
+    if [[ "$kv_json" == "{}" ]]; then
+        echo "  (empty)"
+    else
+        echo "$kv_json" | python3 -c "
+import json, sys
+kv = json.load(sys.stdin)
+for key, value in sorted(kv.items()):
+    print(f'  {key}: {value[:80]}...' if len(value) > 80 else f'  {key}: {value}')
+"
+    fi
+
+    echo ""
+
+    # List Claude Code memory
+    echo "Claude Code memory:"
+    docker exec "$cname" sh -c 'if [ -d ~/.claude/projects ]; then find ~/.claude/projects -name "*.md" -type f 2>/dev/null | sed "s|^/home/agent/||" | sed "s/^/  /"; fi' 2>/dev/null || echo "  (none found)"
+
+    echo ""
+
+    # List brainstorm artifacts
+    echo "Brainstorm artifacts:"
+    docker exec "$cname" sh -c 'if [ -d /gt/.brainstorms ]; then ls -1 /gt/.brainstorms 2>/dev/null | sed "s/^/  /"; fi' 2>/dev/null || echo "  (none found)"
+}
+
 # --- main ---
 
 [[ $# -lt 1 ]] && usage
@@ -496,6 +766,9 @@ case "$cmd" in
         ;;
     tier|cost-tier)
         cmd_tier "$@"
+        ;;
+    memory)
+        cmd_memory "$@"
         ;;
     help|--help|-h)
         usage

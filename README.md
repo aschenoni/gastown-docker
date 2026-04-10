@@ -144,6 +144,66 @@ gt-docker down <instance>          # stop (keeps data in volumes)
 gt-docker destroy <instance>       # stop and delete all data
 ```
 
+## Syncing Memories Between Instances
+
+Gas Town stores agent memories in multiple places. The `gt-docker memory` commands let you export, import, and sync memories between instances.
+
+### What Gets Synced
+
+- **bd kv store** — Agent memories with `memory.*` prefix (feedback, user context, project context, references)
+- **Claude Code memory** — Files in `~/.claude/projects/*/memory/`
+- **Brainstorm artifacts** — Markdown files in `/gt/.brainstorms/`
+
+### Memory Commands
+
+```bash
+# Export memories from an instance to a file
+gt-docker memory export alpha memories-alpha.tar.gz
+
+# Import memories from a file into an instance
+gt-docker memory import bravo memories-alpha.tar.gz
+
+# Sync memories directly between instances
+gt-docker memory sync alpha bravo              # alpha → bravo
+
+# List what memories exist in an instance
+gt-docker memory list alpha
+```
+
+### Example Workflow
+
+```bash
+# Create two instances
+gt-docker up alpha
+gt-docker up bravo
+
+# Work in alpha, add some memories
+gt-docker exec alpha gt remember "API rate limit is 1000 req/min"
+gt-docker exec alpha gt remember --type feedback "Always use batch endpoints for bulk operations"
+
+# Sync memories from alpha to bravo
+gt-docker memory sync alpha bravo
+
+# Verify they're now in bravo
+gt-docker memory list bravo
+```
+
+### Conflict Handling
+
+When importing memories, if a key already exists with a different value, you'll be prompted:
+
+```
+⚠️  Conflicts detected:
+
+  Key: memory.feedback.api-usage
+    Existing: Use REST API v1...
+    Import:   Use GraphQL API v2...
+
+  Keep [e]xisting, import [n]ew, or [s]kip?
+```
+
+This ensures you never accidentally overwrite important memories.
+
 ## How It Works
 
 ### Isolation
