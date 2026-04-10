@@ -15,4 +15,4 @@ chown -R agent:agent /gt /home/agent
 # Drop to agent user with a full login environment.
 # Using su -l ensures HOME, USER, UID are all set correctly so that
 # gt, tmux, and dolt all use /tmp/tmux-1000/ (agent's UID) consistently.
-exec su -l agent -s /bin/sh -c "export GIT_USER='$GIT_USER' GIT_EMAIL='$GIT_EMAIL' && cd /gt && /app/docker-entrypoint.sh $*"
+exec su -l agent -s /bin/sh -c "export GIT_USER='$GIT_USER' GIT_EMAIL='$GIT_EMAIL' SSH_AUTH_SOCK='$SSH_AUTH_SOCK' && cd /gt && /app/docker-entrypoint.sh $*"
