@@ -40,7 +40,6 @@ services:
     ports:
       - "${DASHBOARD_PORT:-0}:8080"
       - "${TERMINAL_PORT:-0}:7681"
-      - "${WEB_PORTS:-3000-3050:3000-3050}"
     command: sleep infinity
 
 volumes:

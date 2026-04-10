@@ -1,0 +1,7 @@
+# Override: expose web development ports on the host.
+# Included automatically by gt-docker when WEB_PORTS is configured.
+
+services:
+  gastown:
+    ports:
+      - "${WEB_PORTS}"

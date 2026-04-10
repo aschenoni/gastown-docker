@@ -10,6 +10,7 @@ while [[ -L "$SOURCE" ]]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+COMPOSE_WEB_PORTS_FILE="$SCRIPT_DIR/docker-compose.web-ports.yml"
 PORTS_FILE="$SCRIPT_DIR/ports.conf"
 
 # macOS Docker Desktop puts binaries here
@@ -55,6 +56,9 @@ Usage:
   gt-docker settings sync <instance> Push plugin settings to a running instance
   gt-docker settings sync --all      Push to all running instances
   gt-docker settings show            Show disabled plugins list
+
+  gt-docker costs <instance> [flags] Show costs (pass-through to gt costs)
+  gt-docker costs export <instance>  Export cost ledger to host for trending
 
   gt-docker tier <instance> [tier]   Get or set cost tier (standard/economy/budget)
   gt-docker tier --all [tier]        Get or set tier for all running instances
@@ -104,6 +108,14 @@ require_running() {
     fi
 }
 
+compose_files() {
+    local args=(-f "$COMPOSE_FILE")
+    if [[ -n "${WEB_PORTS:-}" ]]; then
+        args+=(-f "$COMPOSE_WEB_PORTS_FILE")
+    fi
+    echo "${args[@]}"
+}
+
 cmd_up() {
     local instance="$1"
     compose_env "$instance"
@@ -116,12 +128,12 @@ cmd_up() {
     if [[ "$webstart" != "0" ]]; then
         local webend=$((webstart + 50))
         export WEB_PORTS="${WEB_PORTS:-${webstart}-${webend}:3000-3050}"
-    else
-        export WEB_PORTS="${WEB_PORTS:-3000-3050:3000-3050}"
+    elif [[ -n "${WEB_PORTS:-}" ]]; then
+        export WEB_PORTS
     fi
     export GT_COST_TIER="${GT_COST_TIER:-budget}"
     echo "Starting gastown instance '$instance' (cost tier: $GT_COST_TIER)..."
-    docker compose -f "$COMPOSE_FILE" up -d --build
+    docker compose $(compose_files) up -d --build
     echo ""
     echo "Instance '$instance' is running."
     echo "  Container:  $(container_name "$instance")"
@@ -132,7 +144,9 @@ cmd_up() {
     if [[ "$TERMINAL_PORT" != "0" ]]; then
         echo "  Terminal:   http://terminal.${instance}.town"
     fi
-    echo "  Web ports:  ${WEB_PORTS%:*} → container 3000-3050"
+    if [[ -n "${WEB_PORTS:-}" ]]; then
+        echo "  Web ports:  ${WEB_PORTS%:*} → container 3000-3050"
+    fi
     echo ""
     echo "Services (Dolt, Daemon, Deacon, Mayor, Dashboard, Terminal)"
     echo "start automatically inside the container."
@@ -145,18 +159,48 @@ cmd_up() {
     echo "  gt-docker mayor $instance"
 }
 
+graceful_shutdown() {
+    local instance="$1"
+    local cname
+    cname="$(container_name "$instance")"
+
+    if ! docker inspect --format='{{.State.Running}}' "$cname" 2>/dev/null | grep -q true; then
+        return
+    fi
+
+    # 1. Save Mayor context via handoff mail (persists in /gt Dolt DB)
+    echo "  Saving Mayor context for next session..."
+    docker exec --user agent "$cname" \
+        gt handoff --auto --reason shutdown --no-git-check \
+        -s "HANDOFF: gt-docker down" 2>/dev/null || true
+
+    # 2. Record costs for all active sessions before they're killed
+    echo "  Recording session costs..."
+    docker exec --user agent "$cname" sh -c '
+        for sess in $(tmux list-sessions -F "#{session_name}" 2>/dev/null | grep "^gt-"); do
+            GT_SESSION="$sess" gt costs record --session "$sess" 2>/dev/null || true
+        done
+    ' 2>/dev/null || true
+
+    # 3. Graceful Gastown shutdown (stops agents, dolt, daemon)
+    echo "  Stopping Gas Town services..."
+    docker exec --user agent "$cname" gt down --all 2>/dev/null || true
+}
+
 cmd_down() {
     local instance="$1"
     compose_env "$instance"
     echo "Stopping instance '$instance'..."
-    docker compose -f "$COMPOSE_FILE" down
+    graceful_shutdown "$instance"
+    docker compose $(compose_files) down
 }
 
 cmd_destroy() {
     local instance="$1"
     compose_env "$instance"
     echo "Destroying instance '$instance' (including volumes)..."
-    docker compose -f "$COMPOSE_FILE" down -v
+    graceful_shutdown "$instance"
+    docker compose $(compose_files) down -v
 }
 
 cmd_mayor() {
@@ -451,6 +495,55 @@ TEOF
     fi
 }
 
+cmd_costs() {
+    local subcmd="${1:-}"
+
+    # Handle "costs export <instance>" subcommand
+    if [[ "$subcmd" == "export" ]]; then
+        shift
+        local instance="${1:-}"
+        shift 2>/dev/null || true
+        if [[ -z "$instance" ]]; then
+            echo "Usage: gt-docker costs export <instance> [output-dir]" >&2
+            exit 1
+        fi
+        local cname
+        cname="$(container_name "$instance")"
+        require_running "$instance"
+
+        local outdir="${1:-$SCRIPT_DIR/costs}"
+        mkdir -p "$outdir"
+        local datestamp
+        datestamp="$(date +%Y-%m-%d)"
+        local outfile="$outdir/${instance}-costs-${datestamp}.jsonl"
+
+        echo "Exporting cost ledger from instance '$instance'..."
+        docker cp "$cname:/home/agent/.gt/costs.jsonl" "$outfile" 2>/dev/null
+        if [[ $? -eq 0 && -f "$outfile" ]]; then
+            local lines
+            lines=$(wc -l < "$outfile" | tr -d ' ')
+            echo "Exported $lines entries to $outfile"
+        else
+            echo "No cost data found (costs.jsonl does not exist yet)." >&2
+            rm -f "$outfile"
+        fi
+        return
+    fi
+
+    # Pass everything through to gt costs inside the container
+    local instance="$subcmd"
+    if [[ -z "$instance" ]]; then
+        echo "Usage: gt-docker costs <instance> [gt-costs-flags...]" >&2
+        echo "       gt-docker costs export <instance> [output-dir]" >&2
+        exit 1
+    fi
+    shift
+    local cname
+    cname="$(container_name "$instance")"
+    require_running "$instance"
+    docker exec --user agent "$cname" gt costs "$@"
+}
+
 # --- main ---
 
 [[ $# -lt 1 ]] && usage
@@ -490,12 +583,17 @@ UPEOF
     down|stop)
         if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
             cat <<'DOWNEOF'
-gt-docker down — stop and remove an instance
+gt-docker down — gracefully stop an instance
 
 Usage:
   gt-docker down <instance>
 
-Stops and removes the container for the specified instance.
+Performs a graceful shutdown before stopping the container:
+  1. Saves Mayor context via handoff mail (restored on next gt-docker up)
+  2. Records costs for all active sessions to the cost ledger
+  3. Stops all Gas Town services cleanly (agents, dolt, daemon)
+  4. Stops and removes the container
+
 Volumes are preserved, so you can restart the instance later with all data intact.
 
 To completely remove an instance including volumes, use:
@@ -639,6 +737,37 @@ LOGSEOF
         ;;
     settings)
         cmd_settings "$@"
+        ;;
+    costs)
+        if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+            cat <<'COSTSEOF'
+gt-docker costs — view and export cost data
+
+Usage:
+  gt-docker costs <instance> [flags]     Show costs (pass-through to gt costs)
+  gt-docker costs export <instance>      Export cost ledger to host for trending
+  gt-docker costs export <instance> dir  Export to a specific directory
+
+The first form passes all flags through to 'gt costs' inside the container.
+Useful flags:
+  --by-role    Breakdown by role (mayor, polecat, witness, etc.)
+  --by-rig     Breakdown by rig
+  --today      Today's costs from session log
+  --week       This week's costs from digest beads
+  --json       Output as JSON
+
+The export form copies the raw cost ledger (JSONL) to the host filesystem
+for trending and analysis. Default output: ./costs/<instance>-costs-<date>.jsonl
+
+Examples:
+  gt-docker costs alpha                  # Live session costs
+  gt-docker costs alpha --by-role        # See which roles cost the most
+  gt-docker costs alpha --week --json    # Weekly costs as JSON
+  gt-docker costs export alpha           # Export ledger for trending
+COSTSEOF
+            exit 0
+        fi
+        cmd_costs "$@"
         ;;
     tier|cost-tier)
         cmd_tier "$@"
