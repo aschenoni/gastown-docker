@@ -45,6 +45,7 @@ Usage:
   gt-docker mayor <instance>         Attach to the Mayor tmux session
   gt-docker shell <instance>         Open a shell in the container
   gt-docker exec <instance> <cmd..>  Run a command in the container
+  gt-docker status <instance> --json  Unified JSON snapshot of instance state
   gt-docker list                     List running gastown containers
   gt-docker logs <instance>          Tail container logs
 
@@ -80,6 +81,7 @@ Examples:
   gt-docker up bravo
   gt-docker mayor alpha              # attach to alpha's Mayor
   gt-docker exec bravo gt agents     # check agents in bravo
+  gt-docker status alpha --json       # JSON snapshot of alpha's state
   gt-docker list                     # see all running instances
   gt-docker tier alpha budget        # switch alpha to budget tier
   gt-docker settings sync --all      # push plugin settings everywhere
@@ -253,6 +255,91 @@ cmd_logs() {
     cname="$(container_name "$instance")"
     require_running "$instance"
     docker logs -f "$cname"
+}
+
+cmd_status() {
+    local instance="$1"
+    shift
+    local json_flag=""
+    for arg in "$@"; do
+        case "$arg" in
+            --json) json_flag=true ;;
+        esac
+    done
+
+    if [[ -z "$json_flag" ]]; then
+        echo "Usage: gt-docker status <instance> --json" >&2
+        exit 1
+    fi
+
+    local cname
+    cname="$(container_name "$instance")"
+    require_running "$instance"
+
+    # Single docker exec: gather all data inside the container, assemble via jq
+    docker exec --user agent "$cname" sh -c '
+        # 1. Polecats
+        polecats_json=$(gt polecat list --all --json 2>/dev/null || echo "[]")
+
+        # 2. Convoys
+        convoys_json=$(gt convoy list --json 2>/dev/null || echo "[]")
+
+        # 3. Open beads by priority
+        beads_json=$(bd count 2>/dev/null || echo "null")
+        if [ "$beads_json" = "null" ] || [ -z "$beads_json" ]; then
+            # Fallback: count manually from bd list
+            p1=$(bd list --status=open --priority=1 2>/dev/null | grep -c "^[○◐●]" || echo 0)
+            p2=$(bd list --status=open --priority=2 2>/dev/null | grep -c "^[○◐●]" || echo 0)
+            p3=$(bd list --status=open --priority=3 2>/dev/null | grep -c "^[○◐●]" || echo 0)
+            total=$((p1 + p2 + p3))
+            beads_json=$(printf "{\"p1\":%d,\"p2\":%d,\"p3\":%d,\"total\":%d}" "$p1" "$p2" "$p3" "$total")
+        fi
+
+        # 4. Recent activity from town.log (last 10 lines)
+        if [ -f /gt/town.log ]; then
+            recent_json=$(tail -10 /gt/town.log | jq -Rs "split(\"\n\") | map(select(length > 0))")
+        else
+            recent_json="[]"
+        fi
+
+        # 5. Mayor status
+        mayor_attached=false
+        if tmux has-session -t hq-mayor 2>/dev/null; then
+            mayor_attached=true
+        fi
+        mayor_last="null"
+        if [ -f /gt/mayor/town.json ]; then
+            mayor_last=$(date -r /gt/mayor/town.json -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null | jq -R . 2>/dev/null || echo "null")
+        fi
+
+        # 6. Daemon status
+        daemon_running=false
+        daemon_pid=null
+        dpid=$(pgrep -f "gt daemon" 2>/dev/null | head -1 || true)
+        if [ -n "$dpid" ]; then
+            daemon_running=true
+            daemon_pid=$dpid
+        fi
+
+        # Assemble unified JSON via jq
+        jq -n \
+            --argjson polecats "$polecats_json" \
+            --argjson convoys "$convoys_json" \
+            --argjson open_beads "$beads_json" \
+            --argjson recent_activity "$recent_json" \
+            --argjson mayor_attached "$mayor_attached" \
+            --argjson mayor_last "$mayor_last" \
+            --argjson daemon_running "$daemon_running" \
+            --argjson daemon_pid "$daemon_pid" \
+            "{
+                polecats: \$polecats,
+                convoys: \$convoys,
+                open_beads: \$open_beads,
+                recent_activity: \$recent_activity,
+                mayor: { attached: \$mayor_attached, last_activity: \$mayor_last },
+                daemon: { running: \$daemon_running, pid: \$daemon_pid }
+            }"
+    '
 }
 
 sync_to_instance() {
@@ -694,6 +781,34 @@ EXECEOF
         fi
         [[ $# -lt 1 ]] && { echo "Usage: gt-docker exec <instance> <cmd..>" >&2; exit 1; }
         cmd_exec_cmd "$@"
+        ;;
+    status)
+        if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+            cat <<'STATUSEOF'
+gt-docker status — unified JSON snapshot of instance state
+
+Usage:
+  gt-docker status <instance> --json
+
+Returns a single JSON object with the current state of the instance:
+  - polecats:        Running polecat workers and their assignments
+  - convoys:         Active convoy progress
+  - open_beads:      Open issue counts by priority
+  - recent_activity: Last 10 events from town.log
+  - mayor:           Whether the Mayor is attached and last activity time
+  - daemon:          Whether the daemon process is running and its PID
+
+The --json flag is required.
+
+Examples:
+  gt-docker status alpha --json
+  gt-docker status alpha --json | jq '.polecats'
+  gt-docker status alpha --json | jq '.open_beads.total'
+STATUSEOF
+            exit 0
+        fi
+        [[ $# -lt 1 ]] && { echo "Usage: gt-docker status <instance> --json" >&2; exit 1; }
+        cmd_status "$@"
         ;;
     list|ls|ps)
         if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
