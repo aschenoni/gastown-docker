@@ -2,3 +2,7 @@
 .env
 ports.conf
 costs/
+.beads/
+.claude/
+.runtime/
+CLAUDE.md
