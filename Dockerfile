@@ -90,6 +90,7 @@ RUN chmod +x /app/docker-entrypoint.sh /app/ttyd-mayor.sh
 COPY --chown=agent:agent formulas/ /app/custom-formulas/
 COPY --chown=agent:agent plugins/ /app/custom-plugins/
 COPY --chown=agent:agent settings/ /app/custom-settings/
+COPY --chown=agent:agent scripts/ /app/scripts/
 RUN chmod +x /app/custom-settings/apply-settings.sh
 
 WORKDIR /gt

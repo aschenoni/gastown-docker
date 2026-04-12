@@ -60,6 +60,7 @@ Usage:
 
   gt-docker costs <instance> [flags] Show costs (pass-through to gt costs)
   gt-docker costs export <instance>  Export cost ledger to host for trending
+  gt-docker tokens <instance> [flags] Show token usage from live sessions
 
   gt-docker tier <instance> [tier]   Get or set cost tier (standard/economy/budget)
   gt-docker tier --all [tier]        Get or set tier for all running instances
@@ -631,6 +632,19 @@ cmd_costs() {
     docker exec --user agent "$cname" gt costs "$@"
 }
 
+cmd_tokens() {
+    local instance="${1:-}"
+    if [[ -z "$instance" ]]; then
+        echo "Usage: gt-docker tokens <instance> [--by-role]" >&2
+        exit 1
+    fi
+    shift
+    local cname
+    cname="$(container_name "$instance")"
+    require_running "$instance"
+    docker exec --user agent "$cname" node /app/scripts/token-usage.js "$@"
+}
+
 # --- main ---
 
 [[ $# -lt 1 ]] && usage
@@ -883,6 +897,30 @@ COSTSEOF
             exit 0
         fi
         cmd_costs "$@"
+        ;;
+    tokens)
+        if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+            cat <<'TOKENSEOF'
+gt-docker tokens — show token usage from live sessions
+
+Usage:
+  gt-docker tokens <instance> [--by-role]
+
+Reads Claude Code transcript files directly and outputs raw token counts
+(input, output, cache read, cache create) instead of USD costs. This is
+more meaningful for flat-rate Claude subscriptions where usage is throttled
+by tokens, not dollars.
+
+Flags:
+  --by-role    Show breakdown by role
+
+Examples:
+  gt-docker tokens alpha                # Live token usage
+  gt-docker tokens alpha --by-role      # Token usage by role
+TOKENSEOF
+            exit 0
+        fi
+        cmd_tokens "$@"
         ;;
     tier|cost-tier)
         cmd_tier "$@"
